@@ -3,10 +3,12 @@ import streamlit as st
 from openai import OpenAI
 from dotenv import load_dotenv
 
+# ------------------------------
+# Load environment
+# ------------------------------
 load_dotenv()
 
 api_key = None
-
 try:
     api_key = st.secrets["OPENAI_API_KEY"]
 except Exception:
@@ -18,13 +20,63 @@ if not api_key:
 
 client = OpenAI(api_key=api_key)
 
+# ------------------------------
+# Page config
+# ------------------------------
+st.set_page_config(
+    page_title="AI QA Assistant",
+    page_icon="🧪",
+    layout="centered",
+)
+
+# ------------------------------
+# Header
+# ------------------------------
 st.title("AI QA Assistant")
 st.write("Generate bug reports, test cases, and high-level test scenarios using AI.")
 
-title = st.text_input("Title / Requirement / Feature")
-context = st.text_area("Context / Business Requirement Details")
+# ------------------------------
+# Inputs
+# ------------------------------
+title = st.text_input(
+    "Title / Requirement / Feature *",
+    placeholder="Example: Patient should be able to reschedule appointments online"
+)
 
-if st.button("Generate Bug Report"):
+context = st.text_area(
+    "Context / Business Requirement Details *",
+    height=150,
+    placeholder="Paste the business requirement, bug details, acceptance criteria, or feature context here..."
+)
+
+# ------------------------------
+# Validation
+# ------------------------------
+is_form_valid = bool(title.strip()) and bool(context.strip())
+
+if is_form_valid:
+    st.success("Looks good. You can now generate outputs.")
+else:
+    st.info("Please enter both Title and Context to enable all actions.")
+
+# ------------------------------
+# Buttons
+# ------------------------------
+col1, col2, col3 = st.columns(3)
+
+with col1:
+    bug_btn = st.button("Generate Bug Report", disabled=not is_form_valid, use_container_width=True)
+
+with col2:
+    case_btn = st.button("Generate Test Cases", disabled=not is_form_valid, use_container_width=True)
+
+with col3:
+    scenario_btn = st.button("Generate Test Scenarios", disabled=not is_form_valid, use_container_width=True)
+
+# ------------------------------
+# Generate Bug Report
+# ------------------------------
+if bug_btn:
     prompt = f"""
 You are a senior QA engineer.
 
@@ -46,16 +98,19 @@ Keep it practical, realistic, and ready to copy into Jira or Azure DevOps.
 If some details are missing, make reasonable QA assumptions.
 """
 
-    response = client.chat.completions.create(
-        model="gpt-4o-mini",
-        messages=[{"role": "user", "content": prompt}]
-    )
+    with st.spinner("Generating bug report..."):
+        response = client.chat.completions.create(
+            model="gpt-4o-mini",
+            messages=[{"role": "user", "content": prompt}]
+        )
 
     st.subheader("Generated Bug Report")
     st.write(response.choices[0].message.content)
-if not title:
-    st.warning("Please enter a title or requirement before generating results.")
-if st.button("Generate Test Cases"):
+
+# ------------------------------
+# Generate Test Cases
+# ------------------------------
+if case_btn:
     prompt = f"""
 You are a senior QA engineer.
 
@@ -73,15 +128,19 @@ Regression Test Cases
 Keep the test cases practical, concise, and useful for QA execution.
 """
 
-    response = client.chat.completions.create(
-        model="gpt-4o-mini",
-        messages=[{"role": "user", "content": prompt}]
-    )
+    with st.spinner("Generating test cases..."):
+        response = client.chat.completions.create(
+            model="gpt-4o-mini",
+            messages=[{"role": "user", "content": prompt}]
+        )
 
     st.subheader("Generated Test Cases")
     st.write(response.choices[0].message.content)
 
-if st.button("Generate Test Scenarios"):
+# ------------------------------
+# Generate Test Scenarios
+# ------------------------------
+if scenario_btn:
     prompt = f"""
 You are a senior QA engineer.
 
@@ -100,10 +159,11 @@ Keep the scenarios high-level, practical, and suitable for review by leadership,
 Do not generate low-level step-by-step test cases unless absolutely necessary.
 """
 
-    response = client.chat.completions.create(
-        model="gpt-4o-mini",
-        messages=[{"role": "user", "content": prompt}]
-    )
+    with st.spinner("Generating test scenarios..."):
+        response = client.chat.completions.create(
+            model="gpt-4o-mini",
+            messages=[{"role": "user", "content": prompt}]
+        )
 
     st.subheader("Generated Test Scenarios")
     st.write(response.choices[0].message.content)
