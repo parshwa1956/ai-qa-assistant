@@ -49,6 +49,14 @@ context = st.text_area(
     placeholder="Paste the business requirement, bug details, acceptance criteria, or feature context here..."
 )
 
+uploaded_file = st.file_uploader(
+    "Upload Screenshot (Optional)",
+    type=["png", "jpg", "jpeg"]
+)
+
+if uploaded_file is not None:
+    st.image(uploaded_file, caption="Uploaded Screenshot", use_container_width=True)
+
 # ------------------------------
 # Validation
 # ------------------------------
@@ -77,6 +85,8 @@ with col3:
 # Generate Bug Report
 # ------------------------------
 if bug_btn:
+    screenshot_note = "A screenshot was uploaded and should be considered if relevant." if uploaded_file else "No screenshot uploaded."
+
     prompt = f"""
 You are a senior QA engineer.
 
@@ -84,6 +94,7 @@ Generate a professional bug report for the following issue.
 
 Title / Requirement / Feature: {title}
 Context: {context}
+Screenshot Note: {screenshot_note}
 
 Return the output with these sections:
 Title
