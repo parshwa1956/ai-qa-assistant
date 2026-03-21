@@ -4,6 +4,7 @@ import base64
 from io import BytesIO
 
 import pandas as pd
+import requests
 import streamlit as st
 from openai import OpenAI
 from dotenv import load_dotenv
@@ -28,6 +29,25 @@ if not api_key:
 client = OpenAI(api_key=api_key)
 
 # ------------------------------
+# Load Jira settings
+# ------------------------------
+jira_base_url = None
+jira_email = None
+jira_api_token = None
+jira_project_key = None
+
+try:
+    jira_base_url = st.secrets["JIRA_BASE_URL"]
+    jira_email = st.secrets["JIRA_EMAIL"]
+    jira_api_token = st.secrets["JIRA_API_TOKEN"]
+    jira_project_key = st.secrets["JIRA_PROJECT_KEY"]
+except Exception:
+    jira_base_url = os.getenv("JIRA_BASE_URL")
+    jira_email = os.getenv("JIRA_EMAIL")
+    jira_api_token = os.getenv("JIRA_API_TOKEN")
+    jira_project_key = os.getenv("JIRA_PROJECT_KEY")
+
+# ------------------------------
 # Page config
 # ------------------------------
 st.set_page_config(
@@ -48,6 +68,15 @@ if "generated_text" not in st.session_state:
 if "generated_df" not in st.session_state:
     st.session_state.generated_df = None
 
+if "generated_title" not in st.session_state:
+    st.session_state.generated_title = ""
+
+if "generated_base_name" not in st.session_state:
+    st.session_state.generated_base_name = ""
+
+if "generated_sheet_name" not in st.session_state:
+    st.session_state.generated_sheet_name = ""
+
 if "history" not in st.session_state:
     st.session_state.history = []
 
@@ -55,14 +84,12 @@ if "history" not in st.session_state:
 # Helper functions
 # ------------------------------
 def encode_uploaded_image(uploaded_file):
-    """Convert uploaded image file to base64 data URL."""
     image_bytes = uploaded_file.read()
     encoded = base64.b64encode(image_bytes).decode("utf-8")
     mime_type = uploaded_file.type
     return f"data:{mime_type};base64,{encoded}"
 
 def safe_filename(text):
-    """Convert title into safe filename."""
     cleaned = "".join(c if c.isalnum() or c in (" ", "_", "-") else "" for c in text)
     cleaned = cleaned.strip().replace(" ", "_").lower()
     return cleaned if cleaned else "ai_output"
@@ -76,10 +103,8 @@ def convert_df_to_excel(df, sheet_name="AI_Output"):
     with pd.ExcelWriter(output, engine="openpyxl") as writer:
         df.to_excel(writer, index=False, sheet_name=sheet_name)
 
-        workbook = writer.book
         worksheet = writer.sheets[sheet_name]
 
-        # Header formatting
         header_fill = PatternFill(fill_type="solid", start_color="D9EAF7", end_color="D9EAF7")
         header_font = Font(bold=True)
         wrap_alignment = Alignment(wrap_text=True, vertical="top")
@@ -89,7 +114,6 @@ def convert_df_to_excel(df, sheet_name="AI_Output"):
             cell.fill = header_fill
             cell.alignment = wrap_alignment
 
-        # Body formatting and auto column width
         for col_idx, column_cells in enumerate(worksheet.columns, start=1):
             max_length = 0
             col_letter = get_column_letter(col_idx)
@@ -105,7 +129,6 @@ def convert_df_to_excel(df, sheet_name="AI_Output"):
             adjusted_width = min(max(max_length + 2, 15), 50)
             worksheet.column_dimensions[col_letter].width = adjusted_width
 
-        # Freeze header
         worksheet.freeze_panes = "A2"
 
     return output.getvalue()
@@ -125,9 +148,81 @@ def add_to_history(output_type, title, pretty_text, df):
         "text": pretty_text,
         "df": df.copy() if df is not None else None
     })
-
-    # Keep only latest 10 items
     st.session_state.history = st.session_state.history[:10]
+
+def get_default_jira_issue_type(output_type):
+    mapping = {
+        "Bug Report": "Bug",
+        "Test Cases": "Task",
+        "Test Scenarios": "Story"
+    }
+    return mapping.get(output_type, "Task")
+
+def get_default_jira_labels(output_type):
+    mapping = {
+        "Bug Report": ["bug"],
+        "Test Cases": ["task"],
+        "Test Scenarios": ["story"]
+    }
+    return mapping.get(output_type, ["task"])
+
+def build_jira_description_doc(description_text):
+    lines = [line.strip() for line in description_text.splitlines() if line.strip()]
+
+    content_blocks = []
+    for line in lines:
+        content_blocks.append({
+            "type": "paragraph",
+            "content": [
+                {
+                    "type": "text",
+                    "text": line[:3000]
+                }
+            ]
+        })
+
+    if not content_blocks:
+        content_blocks = [{
+            "type": "paragraph",
+            "content": [{"type": "text", "text": "No description provided."}]
+        }]
+
+    return {
+        "type": "doc",
+        "version": 1,
+        "content": content_blocks
+    }
+
+def create_jira_issue(summary, description, issue_type="Task", labels=None):
+    if not all([jira_base_url, jira_email, jira_api_token, jira_project_key]):
+        return False, "Jira settings are missing in Streamlit secrets or .env."
+
+    url = f"{jira_base_url}/rest/api/3/issue"
+
+    headers = {
+        "Accept": "application/json",
+        "Content-Type": "application/json"
+    }
+
+    auth = (jira_email, jira_api_token)
+
+    payload = {
+        "fields": {
+            "project": {"key": jira_project_key},
+            "summary": summary,
+            "description": build_jira_description_doc(description),
+            "issuetype": {"name": issue_type},
+            "labels": labels or []
+        }
+    }
+
+    response = requests.post(url, json=payload, headers=headers, auth=auth)
+
+    if response.status_code in [200, 201]:
+        data = response.json()
+        return True, data.get("key", "Created")
+
+    return False, response.text
 
 # ------------------------------
 # OpenAI generators
@@ -178,10 +273,7 @@ Rules:
                     "role": "user",
                     "content": [
                         {"type": "text", "text": text_prompt},
-                        {
-                            "type": "image_url",
-                            "image_url": {"url": image_data_url}
-                        }
+                        {"type": "image_url", "image_url": {"url": image_data_url}}
                     ]
                 }
             ]
@@ -368,6 +460,7 @@ def render_current_output():
         df = st.session_state.generated_df
         base_name = st.session_state.generated_base_name
         sheet_name = st.session_state.generated_sheet_name
+        generated_title = st.session_state.generated_title
 
         st.subheader(f"Generated {output_type}")
         st.dataframe(df, use_container_width=True)
@@ -375,10 +468,43 @@ def render_current_output():
         st.text_area(
             "Copy Output",
             value=result_text,
-            height=280
+            height=280,
+            key=f"copy_output_{output_type}"
         )
 
         show_download_buttons(df, result_text, base_name, sheet_name)
+
+        st.markdown("### Jira")
+
+        default_issue_type = get_default_jira_issue_type(output_type)
+        default_labels = get_default_jira_labels(output_type)
+
+        issue_type_options = ["Bug", "Task", "Story"]
+        default_index = issue_type_options.index(default_issue_type) if default_issue_type in issue_type_options else 0
+
+        jira_issue_type = st.selectbox(
+            "Issue Type",
+            issue_type_options,
+            index=default_index,
+            key=f"jira_issue_type_{output_type}"
+        )
+
+        if st.button("Create in Jira", use_container_width=True, key=f"create_jira_{output_type}"):
+            with st.spinner("Creating Jira issue..."):
+                success, message = create_jira_issue(
+                    summary=generated_title,
+                    description=result_text,
+                    issue_type=jira_issue_type,
+                    labels=default_labels
+                )
+
+            if success:
+                issue_url = f"{jira_base_url}/browse/{message}" if jira_base_url else ""
+                st.success(f"Jira issue created successfully: {message}")
+                if issue_url:
+                    st.markdown(f"[Open Jira Issue]({issue_url})")
+            else:
+                st.error(f"Failed to create Jira issue: {message}")
 
 def render_history():
     if not st.session_state.history:
@@ -460,6 +586,7 @@ if bug_btn:
         base_name = f"{safe_filename(title)}_bug_report"
 
         st.session_state.generated_type = "Bug Report"
+        st.session_state.generated_title = title
         st.session_state.generated_text = result_text
         st.session_state.generated_df = df_bug
         st.session_state.generated_base_name = base_name
@@ -478,6 +605,7 @@ if case_btn:
         base_name = f"{safe_filename(title)}_test_cases"
 
         st.session_state.generated_type = "Test Cases"
+        st.session_state.generated_title = title
         st.session_state.generated_text = result_text
         st.session_state.generated_df = df_cases
         st.session_state.generated_base_name = base_name
@@ -496,6 +624,7 @@ if scenario_btn:
         base_name = f"{safe_filename(title)}_test_scenarios"
 
         st.session_state.generated_type = "Test Scenarios"
+        st.session_state.generated_title = title
         st.session_state.generated_text = result_text
         st.session_state.generated_df = df_scenarios
         st.session_state.generated_base_name = base_name
@@ -518,6 +647,7 @@ render_history()
 if st.session_state.generated_type:
     if st.button("Clear Current Output", use_container_width=True):
         st.session_state.generated_type = None
+        st.session_state.generated_title = ""
         st.session_state.generated_text = ""
         st.session_state.generated_df = None
         st.session_state.generated_base_name = ""
