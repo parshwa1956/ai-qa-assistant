@@ -80,12 +80,28 @@ if "generated_sheet_name" not in st.session_state:
 if "history" not in st.session_state:
     st.session_state.history = []
 
+if "flow_generated_text" not in st.session_state:
+    st.session_state.flow_generated_text = ""
+
+if "flow_generated_title" not in st.session_state:
+    st.session_state.flow_generated_title = ""
+
+if "flow_generated_df" not in st.session_state:
+    st.session_state.flow_generated_df = None
+
+if "flow_generated_base_name" not in st.session_state:
+    st.session_state.flow_generated_base_name = ""
+
+if "flow_uploaded_name" not in st.session_state:
+    st.session_state.flow_uploaded_name = ""
+
 # ------------------------------
 # Helper functions
 # ------------------------------
 def encode_uploaded_image(uploaded_file):
-    image_bytes = uploaded_file.read()
-    encoded = base64.b64encode(image_bytes).decode("utf-8")
+    file_bytes = uploaded_file.read()
+    uploaded_file.seek(0)
+    encoded = base64.b64encode(file_bytes).decode("utf-8")
     mime_type = uploaded_file.type
     return f"data:{mime_type};base64,{encoded}"
 
@@ -417,6 +433,134 @@ Notes: {sc.get('Notes', '')}
 
     return pretty_text, df
 
+def reset_flow_output_if_new_file(uploaded_flow):
+    if uploaded_flow is None:
+        return
+
+    if st.session_state.flow_uploaded_name != uploaded_flow.name:
+        st.session_state.flow_generated_text = ""
+        st.session_state.flow_generated_title = ""
+        st.session_state.flow_generated_df = None
+        st.session_state.flow_generated_base_name = ""
+        st.session_state.flow_uploaded_name = uploaded_flow.name
+
+def generate_requirements_from_flow(uploaded_flow):
+    prompt = """
+Analyze this flow diagram and generate concise business requirements.
+
+Return ONLY valid JSON.
+Do not add markdown.
+Do not add explanation text.
+
+Use this exact JSON structure:
+{
+  "requirements": {
+    "Process Summary": "",
+    "Main Flow": [
+      "Step 1",
+      "Step 2",
+      "Step 3"
+    ],
+    "Decision Points": [
+      "Decision 1",
+      "Decision 2"
+    ],
+    "Test Data Points for E2E Validation": [
+      "Data Point 1",
+      "Data Point 2"
+    ]
+  }
+}
+
+Rules:
+- Keep the output simple, clear, and business-friendly.
+- Focus only on the main workflow.
+- Do not add too much extra detail.
+- Main Flow should contain the core process steps in correct order.
+- Decision Points should contain only key business decisions.
+- Test Data Points should contain the main data needed to validate the end-to-end flow.
+- If any part of the flow is unclear, say "Needs review" instead of guessing.
+"""
+
+    if uploaded_flow.type in ["image/png", "image/jpg", "image/jpeg"]:
+        image_data_url = encode_uploaded_image(uploaded_flow)
+
+        response = client.chat.completions.create(
+            model="gpt-4o-mini",
+            messages=[
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "text", "text": prompt},
+                        {"type": "image_url", "image_url": {"url": image_data_url}}
+                    ]
+                }
+            ]
+        )
+        content = response.choices[0].message.content
+
+    elif uploaded_flow.type == "application/pdf":
+        file_bytes = uploaded_flow.read()
+        uploaded_flow.seek(0)
+
+        uploaded_pdf = client.files.create(
+            file=(uploaded_flow.name, file_bytes, "application/pdf"),
+            purpose="user_data"
+        )
+
+        response = client.responses.create(
+            model="gpt-4.1",
+            input=[
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "input_text", "text": prompt},
+                        {"type": "input_file", "file_id": uploaded_pdf.id}
+                    ]
+                }
+            ]
+        )
+
+        content = response.output_text
+
+    else:
+        raise ValueError("Unsupported file type. Please upload PNG, JPG, JPEG, or PDF.")
+
+    parsed = parse_json_response(content)
+    req = parsed["requirements"]
+
+    main_flow_text = "\n".join(
+        [f"{idx + 1}. {step}" for idx, step in enumerate(req.get("Main Flow", []))]
+    )
+    decision_points_text = "\n".join(
+        [f"- {item}" for item in req.get("Decision Points", [])]
+    )
+    test_data_text = "\n".join(
+        [f"- {item}" for item in req.get("Test Data Points for E2E Validation", [])]
+    )
+
+    pretty_text = f"""Process Summary:
+{req.get('Process Summary', '')}
+
+Main Flow:
+{main_flow_text}
+
+Decision Points:
+{decision_points_text}
+
+Test Data Points for E2E Validation:
+{test_data_text}
+"""
+
+    df = pd.DataFrame([{
+        "Process Summary": req.get("Process Summary", ""),
+        "Main Flow": main_flow_text,
+        "Decision Points": decision_points_text,
+        "Test Data Points for E2E Validation": test_data_text
+    }])
+
+    return pretty_text, df
+
 # ------------------------------
 # Display helpers
 # ------------------------------
@@ -506,6 +650,25 @@ def render_current_output():
             else:
                 st.error(f"Failed to create Jira issue: {message}")
 
+def render_flow_output():
+    if st.session_state.flow_generated_df is not None:
+        st.subheader("Generated Requirements")
+        st.dataframe(st.session_state.flow_generated_df, use_container_width=True)
+
+        st.text_area(
+            "Copy Output",
+            value=st.session_state.flow_generated_text,
+            height=320,
+            key="copy_output_flow_requirements"
+        )
+
+        show_download_buttons(
+            st.session_state.flow_generated_df,
+            st.session_state.flow_generated_text,
+            st.session_state.flow_generated_base_name,
+            "Flow_Requirements"
+        )
+
 def render_history():
     if not st.session_state.history:
         return
@@ -527,129 +690,174 @@ def render_history():
 # Header
 # ------------------------------
 st.title("AI QA Assistant")
-st.write("Generate bug reports, test cases, and high-level test scenarios using AI.")
+st.write("Generate bug reports, test cases, high-level test scenarios, and flow-based requirements using AI.")
+
+tab1, tab2 = st.tabs(["QA Generator", "Flow to Requirements"])
 
 # ------------------------------
-# Inputs
+# Tab 1: QA Generator
 # ------------------------------
-title = st.text_input(
-    "Title / Requirement / Feature *",
-    placeholder="Example: Login button not working on Safari mobile"
-)
+with tab1:
+    title = st.text_input(
+        "Title / Requirement / Feature *",
+        placeholder="Example: Login button not working on Safari mobile"
+    )
 
-context = st.text_area(
-    "Context / Business Requirement Details *",
-    height=150,
-    placeholder="Paste bug details, requirement details, acceptance criteria, or observations here..."
-)
+    context = st.text_area(
+        "Context / Business Requirement Details *",
+        height=150,
+        placeholder="Paste bug details, requirement details, acceptance criteria, or observations here..."
+    )
 
-uploaded_file = st.file_uploader(
-    "Upload Screenshot (Optional)",
-    type=["png", "jpg", "jpeg"]
-)
+    uploaded_file = st.file_uploader(
+        "Upload Screenshot (Optional)",
+        type=["png", "jpg", "jpeg"],
+        key="qa_screenshot_upload"
+    )
 
-if uploaded_file is not None:
-    st.image(uploaded_file, caption="Uploaded Screenshot", use_container_width=True)
+    if uploaded_file is not None:
+        st.image(uploaded_file, caption="Uploaded Screenshot", use_container_width=True)
+
+    is_form_valid = bool(title.strip()) and bool(context.strip())
+
+    if is_form_valid:
+        st.success("Looks good. You can now generate outputs.")
+    else:
+        st.info("Enter Title and Context to enable Bug Report, Test Cases, and Test Scenarios.")
+
+    col1, col2, col3 = st.columns(3)
+
+    with col1:
+        bug_btn = st.button("Generate Bug Report", disabled=not is_form_valid, use_container_width=True)
+
+    with col2:
+        case_btn = st.button("Generate Test Cases", disabled=not is_form_valid, use_container_width=True)
+
+    with col3:
+        scenario_btn = st.button("Generate Test Scenarios", disabled=not is_form_valid, use_container_width=True)
+
+    if bug_btn:
+        try:
+            with st.spinner("Generating bug report..."):
+                result_text, df_bug = generate_bug_report_with_optional_image(title, context, uploaded_file)
+
+            base_name = f"{safe_filename(title)}_bug_report"
+
+            st.session_state.generated_type = "Bug Report"
+            st.session_state.generated_title = title
+            st.session_state.generated_text = result_text
+            st.session_state.generated_df = df_bug
+            st.session_state.generated_base_name = base_name
+            st.session_state.generated_sheet_name = "Bug_Report"
+
+            add_to_history("Bug Report", title, result_text, df_bug)
+
+        except Exception as e:
+            st.error(f"Failed to generate bug report: {e}")
+
+    if case_btn:
+        try:
+            with st.spinner("Generating test cases..."):
+                result_text, df_cases = generate_test_cases(title, context)
+
+            base_name = f"{safe_filename(title)}_test_cases"
+
+            st.session_state.generated_type = "Test Cases"
+            st.session_state.generated_title = title
+            st.session_state.generated_text = result_text
+            st.session_state.generated_df = df_cases
+            st.session_state.generated_base_name = base_name
+            st.session_state.generated_sheet_name = "Test_Cases"
+
+            add_to_history("Test Cases", title, result_text, df_cases)
+
+        except Exception as e:
+            st.error(f"Failed to generate test cases: {e}")
+
+    if scenario_btn:
+        try:
+            with st.spinner("Generating test scenarios..."):
+                result_text, df_scenarios = generate_test_scenarios(title, context)
+
+            base_name = f"{safe_filename(title)}_test_scenarios"
+
+            st.session_state.generated_type = "Test Scenarios"
+            st.session_state.generated_title = title
+            st.session_state.generated_text = result_text
+            st.session_state.generated_df = df_scenarios
+            st.session_state.generated_base_name = base_name
+            st.session_state.generated_sheet_name = "Test_Scenarios"
+
+            add_to_history("Test Scenarios", title, result_text, df_scenarios)
+
+        except Exception as e:
+            st.error(f"Failed to generate test scenarios: {e}")
+
+    render_current_output()
+    render_history()
+
+    if st.session_state.generated_type:
+        if st.button("Clear Current Output", use_container_width=True, key="clear_qa_output"):
+            st.session_state.generated_type = None
+            st.session_state.generated_title = ""
+            st.session_state.generated_text = ""
+            st.session_state.generated_df = None
+            st.session_state.generated_base_name = ""
+            st.session_state.generated_sheet_name = ""
+            st.rerun()
 
 # ------------------------------
-# Validation
+# Tab 2: Flow to Requirements
 # ------------------------------
-is_form_valid = bool(title.strip()) and bool(context.strip())
+with tab2:
+    st.subheader("Flow Diagram to Requirements")
+    st.caption("Upload a flow diagram and generate concise requirements with E2E test data points.")
 
-if is_form_valid:
-    st.success("Looks good. You can now generate outputs.")
-else:
-    st.info("Enter Title and Context to enable Bug Report, Test Cases, and Test Scenarios.")
+    uploaded_flow = st.file_uploader(
+        "Upload Flow Diagram",
+        type=["png", "jpg", "jpeg", "pdf"],
+        key="flow_diagram_upload"
+    )
 
-# ------------------------------
-# Buttons
-# ------------------------------
-col1, col2, col3 = st.columns(3)
+    if uploaded_flow is not None:
+        reset_flow_output_if_new_file(uploaded_flow)
 
-with col1:
-    bug_btn = st.button("Generate Bug Report", disabled=not is_form_valid, use_container_width=True)
+        if uploaded_flow.type in ["image/png", "image/jpg", "image/jpeg"]:
+            st.image(uploaded_flow, caption="Uploaded Flow Diagram", use_container_width=True)
+        elif uploaded_flow.type == "application/pdf":
+            st.info(f"PDF uploaded: {uploaded_flow.name}")
 
-with col2:
-    case_btn = st.button("Generate Test Cases", disabled=not is_form_valid, use_container_width=True)
+    flow_btn = st.button(
+        "Generate Requirements",
+        disabled=uploaded_flow is None,
+        use_container_width=True,
+        key="generate_flow_requirements"
+    )
 
-with col3:
-    scenario_btn = st.button("Generate Test Scenarios", disabled=not is_form_valid, use_container_width=True)
+    if uploaded_flow is None:
+        st.info("Upload a flow diagram to enable Generate Requirements.")
 
-# ------------------------------
-# Actions
-# ------------------------------
-if bug_btn:
-    try:
-        with st.spinner("Generating bug report..."):
-            result_text, df_bug = generate_bug_report_with_optional_image(title, context, uploaded_file)
+    if flow_btn and uploaded_flow is not None:
+        try:
+            flow_title = uploaded_flow.name.rsplit(".", 1)[0]
 
-        base_name = f"{safe_filename(title)}_bug_report"
+            with st.spinner("Generating requirements from flow..."):
+                result_text, df_flow = generate_requirements_from_flow(uploaded_flow)
 
-        st.session_state.generated_type = "Bug Report"
-        st.session_state.generated_title = title
-        st.session_state.generated_text = result_text
-        st.session_state.generated_df = df_bug
-        st.session_state.generated_base_name = base_name
-        st.session_state.generated_sheet_name = "Bug_Report"
+            st.session_state.flow_generated_title = flow_title
+            st.session_state.flow_generated_text = result_text
+            st.session_state.flow_generated_df = df_flow
+            st.session_state.flow_generated_base_name = f"{safe_filename(flow_title)}_requirements"
 
-        add_to_history("Bug Report", title, result_text, df_bug)
+        except Exception as e:
+            st.error(f"Failed to generate requirements: {e}")
 
-    except Exception as e:
-        st.error(f"Failed to generate bug report: {e}")
+    render_flow_output()
 
-if case_btn:
-    try:
-        with st.spinner("Generating test cases..."):
-            result_text, df_cases = generate_test_cases(title, context)
-
-        base_name = f"{safe_filename(title)}_test_cases"
-
-        st.session_state.generated_type = "Test Cases"
-        st.session_state.generated_title = title
-        st.session_state.generated_text = result_text
-        st.session_state.generated_df = df_cases
-        st.session_state.generated_base_name = base_name
-        st.session_state.generated_sheet_name = "Test_Cases"
-
-        add_to_history("Test Cases", title, result_text, df_cases)
-
-    except Exception as e:
-        st.error(f"Failed to generate test cases: {e}")
-
-if scenario_btn:
-    try:
-        with st.spinner("Generating test scenarios..."):
-            result_text, df_scenarios = generate_test_scenarios(title, context)
-
-        base_name = f"{safe_filename(title)}_test_scenarios"
-
-        st.session_state.generated_type = "Test Scenarios"
-        st.session_state.generated_title = title
-        st.session_state.generated_text = result_text
-        st.session_state.generated_df = df_scenarios
-        st.session_state.generated_base_name = base_name
-        st.session_state.generated_sheet_name = "Test_Scenarios"
-
-        add_to_history("Test Scenarios", title, result_text, df_scenarios)
-
-    except Exception as e:
-        st.error(f"Failed to generate test scenarios: {e}")
-
-# ------------------------------
-# Render output + history
-# ------------------------------
-render_current_output()
-render_history()
-
-# ------------------------------
-# Optional clear button
-# ------------------------------
-if st.session_state.generated_type:
-    if st.button("Clear Current Output", use_container_width=True):
-        st.session_state.generated_type = None
-        st.session_state.generated_title = ""
-        st.session_state.generated_text = ""
-        st.session_state.generated_df = None
-        st.session_state.generated_base_name = ""
-        st.session_state.generated_sheet_name = ""
-        st.rerun()
+    if st.session_state.flow_generated_df is not None:
+        if st.button("Clear Flow Output", use_container_width=True, key="clear_flow_output"):
+            st.session_state.flow_generated_text = ""
+            st.session_state.flow_generated_title = ""
+            st.session_state.flow_generated_df = None
+            st.session_state.flow_generated_base_name = ""
+            st.rerun()
