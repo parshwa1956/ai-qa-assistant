@@ -456,16 +456,16 @@ Use this exact JSON structure:
 {
   "requirements": {
     "Process Summary": "",
-    "Main Flow": [
+    "What Happens from Start to Finish": [
       "Step 1",
       "Step 2",
       "Step 3"
     ],
-    "Decision Points": [
+    "Important Decisions": [
       "Decision 1",
       "Decision 2"
     ],
-    "Test Data Points for E2E Validation": [
+    "Test Data Needed": [
       "Data Point 1",
       "Data Point 2"
     ]
@@ -473,17 +473,17 @@ Use this exact JSON structure:
 }
 
 Rules:
-- Keep the output simple, clear, and business-friendly.
-- Focus only on the main workflow.
-- Do not add too much extra detail.
-- Main Flow should contain the core process steps in correct order.
-- Decision Points should contain only key business decisions.
-- Test Data Points should contain the main data needed to validate the end-to-end flow.
-- If any part of the flow is unclear, say "Needs review" instead of guessing.
+- Explain the diagram in simple language for a general audience.
+- Clearly describe what happens from the beginning to the end of the process.
+- Keep the output short, clear, and business-friendly.
+- Focus only on the main flow.
+- Do not add too much technical detail.
+- If any part is unclear, say "Needs review" instead of guessing.
 """
 
     if uploaded_flow.type in ["image/png", "image/jpg", "image/jpeg"]:
         image_data_url = encode_uploaded_image(uploaded_flow)
+        uploaded_flow.seek(0)
 
         response = client.chat.completions.create(
             model="gpt-4o-mini",
@@ -529,34 +529,34 @@ Rules:
     parsed = parse_json_response(content)
     req = parsed["requirements"]
 
-    main_flow_text = "\n".join(
-        [f"{idx + 1}. {step}" for idx, step in enumerate(req.get("Main Flow", []))]
+    steps_text = "\n".join(
+        [f"{idx + 1}. {step}" for idx, step in enumerate(req.get("What Happens from Start to Finish", []))]
     )
-    decision_points_text = "\n".join(
-        [f"- {item}" for item in req.get("Decision Points", [])]
+    decisions_text = "\n".join(
+        [f"- {item}" for item in req.get("Important Decisions", [])]
     )
     test_data_text = "\n".join(
-        [f"- {item}" for item in req.get("Test Data Points for E2E Validation", [])]
+        [f"- {item}" for item in req.get("Test Data Needed", [])]
     )
 
     pretty_text = f"""Process Summary:
 {req.get('Process Summary', '')}
 
-Main Flow:
-{main_flow_text}
+What Happens from Start to Finish:
+{steps_text}
 
-Decision Points:
-{decision_points_text}
+Important Decisions:
+{decisions_text}
 
-Test Data Points for E2E Validation:
+Test Data Needed:
 {test_data_text}
 """
 
     df = pd.DataFrame([{
         "Process Summary": req.get("Process Summary", ""),
-        "Main Flow": main_flow_text,
-        "Decision Points": decision_points_text,
-        "Test Data Points for E2E Validation": test_data_text
+        "What Happens from Start to Finish": steps_text,
+        "Important Decisions": decisions_text,
+        "Test Data Needed": test_data_text
     }])
 
     return pretty_text, df
@@ -811,7 +811,7 @@ with tab1:
 # ------------------------------
 with tab2:
     st.subheader("Flow Diagram to Requirements")
-    st.caption("Upload a flow diagram and generate concise requirements with E2E test data points.")
+    st.caption("Upload a flow diagram and generate a simple explanation for general audience.")
 
     uploaded_flow = st.file_uploader(
         "Upload Flow Diagram",
