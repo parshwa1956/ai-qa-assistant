@@ -1,6 +1,7 @@
 import os
 import json
 import base64
+import shutil
 from io import BytesIO
 from datetime import datetime
 
@@ -61,6 +62,7 @@ st.set_page_config(
 # Constants
 # ------------------------------
 PROJECTS_JSON_PATH = "qa_projects.json"
+PROJECT_ASSETS_DIR = "project_assets"
 
 # ------------------------------
 # Light layout tweak
@@ -114,6 +116,69 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 # ------------------------------
+# Filesystem helpers
+# ------------------------------
+def ensure_assets_dir():
+    os.makedirs(PROJECT_ASSETS_DIR, exist_ok=True)
+
+def project_folder_name(project_name: str) -> str:
+    return safe_filename(project_name)
+
+def get_project_asset_dir(project_name: str) -> str:
+    ensure_assets_dir()
+    folder = os.path.join(PROJECT_ASSETS_DIR, project_folder_name(project_name))
+    os.makedirs(folder, exist_ok=True)
+    return folder
+
+def save_uploaded_file_to_project(project_name: str, uploaded_file):
+    if uploaded_file is None:
+        return None
+
+    project_dir = get_project_asset_dir(project_name)
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    base = safe_filename(os.path.splitext(uploaded_file.name)[0])
+    ext = os.path.splitext(uploaded_file.name)[1] or ".bin"
+    filename = f"{timestamp}_{base}{ext}"
+    filepath = os.path.join(project_dir, filename)
+
+    file_bytes = uploaded_file.read()
+    uploaded_file.seek(0)
+
+    with open(filepath, "wb") as f:
+        f.write(file_bytes)
+
+    return filepath
+
+def move_project_asset_dir(old_project_name: str, new_project_name: str):
+    old_dir = os.path.join(PROJECT_ASSETS_DIR, project_folder_name(old_project_name))
+    new_dir = os.path.join(PROJECT_ASSETS_DIR, project_folder_name(new_project_name))
+
+    if not os.path.exists(old_dir):
+        os.makedirs(new_dir, exist_ok=True)
+        return
+
+    if os.path.exists(new_dir):
+        for name in os.listdir(old_dir):
+            src = os.path.join(old_dir, name)
+            dst = os.path.join(new_dir, name)
+            shutil.move(src, dst)
+        shutil.rmtree(old_dir, ignore_errors=True)
+    else:
+        shutil.move(old_dir, new_dir)
+
+def delete_project_asset_dir(project_name: str):
+    folder = os.path.join(PROJECT_ASSETS_DIR, project_folder_name(project_name))
+    if os.path.exists(folder):
+        shutil.rmtree(folder, ignore_errors=True)
+
+def delete_file_if_exists(filepath: str):
+    if filepath and os.path.exists(filepath):
+        try:
+            os.remove(filepath)
+        except Exception:
+            pass
+
+# ------------------------------
 # Persistence helpers
 # ------------------------------
 def df_to_records(df):
@@ -133,6 +198,8 @@ def serialize_project_item(item):
         "text": item.get("text", ""),
         "df_records": df_to_records(item.get("df")),
         "created_at": item.get("created_at", ""),
+        "screenshot_path": item.get("screenshot_path"),
+        "source_filename": item.get("source_filename"),
     }
 
 def deserialize_project_item(item):
@@ -142,27 +209,72 @@ def deserialize_project_item(item):
         "text": item.get("text", ""),
         "df": records_to_df(item.get("df_records")),
         "created_at": item.get("created_at", ""),
+        "screenshot_path": item.get("screenshot_path"),
+        "source_filename": item.get("source_filename"),
+    }
+
+def serialize_projects_state():
+    serializable_projects = {}
+
+    for project_name, project_data in st.session_state.projects.items():
+        if isinstance(project_data, dict):
+            items = project_data.get("items", [])
+            created_at = project_data.get("created_at", "")
+            updated_at = project_data.get("updated_at", "")
+        else:
+            items = project_data
+            created_at = ""
+            updated_at = ""
+
+        serializable_projects[project_name] = {
+            "created_at": created_at,
+            "updated_at": updated_at,
+            "items": [serialize_project_item(item) for item in items],
+        }
+
+    return {
+        "selected_project": st.session_state.selected_project,
+        "projects": serializable_projects,
     }
 
 def save_projects_to_file():
     try:
-        serializable_projects = {}
-        for project_name, items in st.session_state.projects.items():
-            serializable_projects[project_name] = [serialize_project_item(item) for item in items]
-
-        payload = {
-            "selected_project": st.session_state.selected_project,
-            "projects": serializable_projects,
-        }
-
+        payload = serialize_projects_state()
         with open(PROJECTS_JSON_PATH, "w", encoding="utf-8") as f:
             json.dump(payload, f, indent=2, ensure_ascii=False)
     except Exception as e:
         st.warning(f"Could not save projects to file: {e}")
 
+def normalize_loaded_projects(raw_projects):
+    normalized = {}
+
+    for project_name, project_data in raw_projects.items():
+        # backward compatibility if older format was just a list
+        if isinstance(project_data, list):
+            normalized[project_name] = {
+                "created_at": "",
+                "updated_at": "",
+                "items": [deserialize_project_item(item) for item in project_data],
+            }
+        else:
+            normalized[project_name] = {
+                "created_at": project_data.get("created_at", ""),
+                "updated_at": project_data.get("updated_at", ""),
+                "items": [deserialize_project_item(item) for item in project_data.get("items", [])],
+            }
+
+    if "General" not in normalized:
+        now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        normalized["General"] = {"created_at": now_str, "updated_at": now_str, "items": []}
+
+    return normalized
+
 def load_projects_from_file():
     if not os.path.exists(PROJECTS_JSON_PATH):
-        return {"General": []}, "General"
+        now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        return {
+            "General": {"created_at": now_str, "updated_at": now_str, "items": []}
+        }, "General"
 
     try:
         with open(PROJECTS_JSON_PATH, "r", encoding="utf-8") as f:
@@ -170,21 +282,17 @@ def load_projects_from_file():
 
         raw_projects = payload.get("projects", {})
         selected_project = payload.get("selected_project", "General")
-
-        projects = {}
-        for project_name, items in raw_projects.items():
-            projects[project_name] = [deserialize_project_item(item) for item in items]
-
-        if "General" not in projects:
-            projects["General"] = []
+        projects = normalize_loaded_projects(raw_projects)
 
         if selected_project not in projects:
             selected_project = "General"
 
         return projects, selected_project
-
     except Exception:
-        return {"General": []}, "General"
+        now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        return {
+            "General": {"created_at": now_str, "updated_at": now_str, "items": []}
+        }, "General"
 
 # ------------------------------
 # Session state init
@@ -272,13 +380,15 @@ def parse_json_response(content):
         content = content.replace("```json", "").replace("```", "").strip()
     return json.loads(content)
 
-def add_to_history(output_type, title, pretty_text, df):
+def add_to_history(output_type, title, pretty_text, df, screenshot_path=None, source_filename=None):
     record = {
         "type": output_type,
         "title": title,
         "text": pretty_text,
         "df": df.copy() if df is not None else None,
-        "created_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        "created_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        "screenshot_path": screenshot_path,
+        "source_filename": source_filename,
     }
 
     st.session_state.history.insert(0, record)
@@ -287,19 +397,34 @@ def add_to_history(output_type, title, pretty_text, df):
 
 def save_to_project(record):
     selected_project = st.session_state.selected_project
+    now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
     if selected_project not in st.session_state.projects:
-        st.session_state.projects[selected_project] = []
+        st.session_state.projects[selected_project] = {
+            "created_at": now_str,
+            "updated_at": now_str,
+            "items": [],
+        }
+
+    project = st.session_state.projects[selected_project]
 
     project_record = {
         "type": record["type"],
         "title": record["title"],
         "text": record["text"],
         "df": record["df"].copy() if record["df"] is not None else None,
-        "created_at": record["created_at"]
+        "created_at": record["created_at"],
+        "screenshot_path": record.get("screenshot_path"),
+        "source_filename": record.get("source_filename"),
     }
 
-    st.session_state.projects[selected_project].insert(0, project_record)
+    project["items"].insert(0, project_record)
+    project["updated_at"] = now_str
     save_projects_to_file()
+
+def get_selected_project_items():
+    project = st.session_state.projects.get(st.session_state.selected_project, {})
+    return project.get("items", [])
 
 def load_project_item_into_current_output(item):
     st.session_state.generated_type = item["type"]
@@ -317,17 +442,59 @@ def load_project_item_into_current_output(item):
     else:
         st.session_state.generated_sheet_name = "AI_Output"
 
+def rename_project(old_name, new_name):
+    new_name = new_name.strip()
+
+    if not new_name:
+        return False, "Enter a new project name."
+
+    if old_name == "General":
+        return False, "You cannot rename the default General project."
+
+    if new_name == old_name:
+        return False, "New project name is the same as the current name."
+
+    if new_name in st.session_state.projects:
+        return False, "A project with that name already exists."
+
+    if old_name not in st.session_state.projects:
+        return False, "Project not found."
+
+    st.session_state.projects[new_name] = st.session_state.projects.pop(old_name)
+    st.session_state.selected_project = new_name
+    move_project_asset_dir(old_name, new_name)
+    save_projects_to_file()
+    return True, f"Project renamed to '{new_name}'."
+
 def delete_project(project_name):
     if project_name == "General":
         return False, "You cannot delete the default General project."
 
     if project_name in st.session_state.projects:
+        # delete asset files for all items
+        project_items = st.session_state.projects[project_name].get("items", [])
+        for item in project_items:
+            delete_file_if_exists(item.get("screenshot_path"))
+
         del st.session_state.projects[project_name]
+        delete_project_asset_dir(project_name)
         st.session_state.selected_project = "General"
         save_projects_to_file()
         return True, f"Project '{project_name}' deleted."
 
     return False, "Project not found."
+
+def delete_project_item(project_name, idx):
+    project = st.session_state.projects.get(project_name)
+    if not project:
+        return
+
+    items = project.get("items", [])
+    if 0 <= idx < len(items):
+        delete_file_if_exists(items[idx].get("screenshot_path"))
+        del items[idx]
+        project["updated_at"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        save_projects_to_file()
 
 def get_default_jira_issue_type(output_type):
     mapping = {
@@ -827,6 +994,10 @@ def render_history():
             st.markdown(f"**{idx}. {item['type']} — {item['title']}**")
             if item["df"] is not None:
                 st.dataframe(item["df"], use_container_width=True)
+
+            if item.get("screenshot_path") and os.path.exists(item["screenshot_path"]):
+                st.image(item["screenshot_path"], caption=f"Saved screenshot • {item.get('source_filename') or ''}", use_container_width=True)
+
             st.text_area(
                 f"History Output {idx}",
                 value=item["text"],
@@ -834,6 +1005,20 @@ def render_history():
                 key=f"history_text_{idx}"
             )
             st.markdown("---")
+
+def item_matches_search(item, search_term: str):
+    if not search_term:
+        return True
+
+    search_term = search_term.lower().strip()
+    haystack = " ".join([
+        str(item.get("title", "")),
+        str(item.get("type", "")),
+        str(item.get("text", ""))[:2000],
+        str(item.get("source_filename", "")),
+    ]).lower()
+
+    return search_term in haystack
 
 def render_sidebar_projects():
     st.sidebar.markdown("### Projects")
@@ -851,7 +1036,12 @@ def render_sidebar_projects():
         elif project_name in st.session_state.projects:
             st.sidebar.warning("Project already exists.")
         else:
-            st.session_state.projects[project_name] = []
+            now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            st.session_state.projects[project_name] = {
+                "created_at": now_str,
+                "updated_at": now_str,
+                "items": [],
+            }
             st.session_state.selected_project = project_name
             save_projects_to_file()
             st.rerun()
@@ -866,12 +1056,23 @@ def render_sidebar_projects():
     )
     st.session_state.selected_project = selected_project
 
-    col_a, col_b = st.sidebar.columns(2)
-    with col_a:
-        if st.button("Open", use_container_width=True, key="sidebar_open_project_btn"):
-            st.session_state.selected_project = selected_project
-            save_projects_to_file()
-    with col_b:
+    rename_value = st.sidebar.text_input(
+        "Rename selected project",
+        value="" if selected_project == "General" else selected_project,
+        key="sidebar_rename_project_value"
+    )
+
+    rename_col, delete_col = st.sidebar.columns(2)
+    with rename_col:
+        if st.button("Rename", use_container_width=True, key="sidebar_rename_project_btn"):
+            success, msg = rename_project(selected_project, rename_value)
+            if success:
+                st.sidebar.success(msg)
+                st.rerun()
+            else:
+                st.sidebar.warning(msg)
+
+    with delete_col:
         if st.button("Delete", use_container_width=True, key="sidebar_delete_project_btn"):
             success, msg = delete_project(selected_project)
             if success:
@@ -880,44 +1081,62 @@ def render_sidebar_projects():
             else:
                 st.sidebar.warning(msg)
 
-    project_items = st.session_state.projects.get(selected_project, [])
+    project_data = st.session_state.projects.get(selected_project, {})
+    project_items = project_data.get("items", [])
+    created_at = project_data.get("created_at", "")
+    updated_at = project_data.get("updated_at", "")
 
     st.sidebar.markdown(
         f"""
         <div class="sidebar-project-card">
             <div class="sidebar-project-title">{selected_project}</div>
             <div class="small-muted">{len(project_items)} saved item(s)</div>
+            <div class="small-muted">Updated: {updated_at or '-'}</div>
         </div>
         """,
         unsafe_allow_html=True
     )
 
+    search_term = st.sidebar.text_input(
+        "Search saved items",
+        placeholder="Search title, type, text...",
+        key="sidebar_search_items"
+    )
+
     st.sidebar.markdown('<div class="sidebar-section-label">Recent</div>', unsafe_allow_html=True)
 
-    if not project_items:
-        st.sidebar.caption("No saved items yet.")
+    filtered_items = [item for item in project_items if item_matches_search(item, search_term)]
+
+    if not filtered_items:
+        st.sidebar.caption("No saved items found.")
         return
 
-    for idx, item in enumerate(project_items[:20]):
+    for idx, item in enumerate(filtered_items[:20]):
+        # map filtered item back to original index
+        original_idx = project_items.index(item)
+
         st.sidebar.markdown(
             f"""
             <div class="sidebar-item-card">
                 <strong>{item['title']}</strong><br>
-                <span class="small-muted">{item['type']} • {item['created_at']}</span>
+                <span class="small-muted">{item['type']} • {item['created_at']}</span><br>
+                <span class="small-muted">{item.get('source_filename') or ''}</span>
             </div>
             """,
             unsafe_allow_html=True
         )
 
+        if item.get("screenshot_path") and os.path.exists(item["screenshot_path"]):
+            st.sidebar.image(item["screenshot_path"], use_container_width=True)
+
         open_col, delete_col = st.sidebar.columns(2)
         with open_col:
-            if st.button("Open", key=f"sidebar_open_item_{selected_project}_{idx}", use_container_width=True):
+            if st.button("Open", key=f"sidebar_open_item_{selected_project}_{original_idx}", use_container_width=True):
                 load_project_item_into_current_output(item)
                 st.rerun()
         with delete_col:
-            if st.button("Delete", key=f"sidebar_delete_item_{selected_project}_{idx}", use_container_width=True):
-                del st.session_state.projects[selected_project][idx]
-                save_projects_to_file()
+            if st.button("Delete", key=f"sidebar_delete_item_{selected_project}_{original_idx}", use_container_width=True):
+                delete_project_item(selected_project, original_idx)
                 st.rerun()
 
 # ------------------------------
@@ -977,6 +1196,8 @@ with tab1:
 
     if bug_btn:
         try:
+            screenshot_path = save_uploaded_file_to_project(st.session_state.selected_project, uploaded_file) if uploaded_file else None
+
             with st.spinner("Generating bug report..."):
                 result_text, df_bug = generate_bug_report_with_optional_image(title, context, uploaded_file)
 
@@ -989,13 +1210,22 @@ with tab1:
             st.session_state.generated_base_name = base_name
             st.session_state.generated_sheet_name = "Bug_Report"
 
-            add_to_history("Bug Report", title, result_text, df_bug)
+            add_to_history(
+                "Bug Report",
+                title,
+                result_text,
+                df_bug,
+                screenshot_path=screenshot_path,
+                source_filename=uploaded_file.name if uploaded_file else None,
+            )
 
         except Exception as e:
             st.error(f"Failed to generate bug report: {e}")
 
     if case_btn:
         try:
+            screenshot_path = save_uploaded_file_to_project(st.session_state.selected_project, uploaded_file) if uploaded_file else None
+
             with st.spinner("Generating test cases..."):
                 result_text, df_cases = generate_test_cases(title, context)
 
@@ -1008,13 +1238,22 @@ with tab1:
             st.session_state.generated_base_name = base_name
             st.session_state.generated_sheet_name = "Test_Cases"
 
-            add_to_history("Test Cases", title, result_text, df_cases)
+            add_to_history(
+                "Test Cases",
+                title,
+                result_text,
+                df_cases,
+                screenshot_path=screenshot_path,
+                source_filename=uploaded_file.name if uploaded_file else None,
+            )
 
         except Exception as e:
             st.error(f"Failed to generate test cases: {e}")
 
     if scenario_btn:
         try:
+            screenshot_path = save_uploaded_file_to_project(st.session_state.selected_project, uploaded_file) if uploaded_file else None
+
             with st.spinner("Generating test scenarios..."):
                 result_text, df_scenarios = generate_test_scenarios(title, context)
 
@@ -1027,7 +1266,14 @@ with tab1:
             st.session_state.generated_base_name = base_name
             st.session_state.generated_sheet_name = "Test_Scenarios"
 
-            add_to_history("Test Scenarios", title, result_text, df_scenarios)
+            add_to_history(
+                "Test Scenarios",
+                title,
+                result_text,
+                df_scenarios,
+                screenshot_path=screenshot_path,
+                source_filename=uploaded_file.name if uploaded_file else None,
+            )
 
         except Exception as e:
             st.error(f"Failed to generate test scenarios: {e}")
