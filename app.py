@@ -2,6 +2,7 @@ import os
 import json
 import base64
 from io import BytesIO
+from datetime import datetime
 
 import pandas as pd
 import requests
@@ -23,7 +24,7 @@ except Exception:
     api_key = os.getenv("OPENAI_API_KEY")
 
 if not api_key:
-    st.error("OpenAI API key not found. Add it in Streamlit Secrets or local .env file.")
+    st.error("OpenAI API key not found. Add it in Streamlit secrets or local .env file.")
     st.stop()
 
 client = OpenAI(api_key=api_key)
@@ -53,47 +54,86 @@ except Exception:
 st.set_page_config(
     page_title="AI QA Assistant",
     page_icon="🧪",
-    layout="centered",
+    layout="wide",
 )
+
+# ------------------------------
+# Light layout tweak
+# ------------------------------
+st.markdown("""
+<style>
+.block-container {
+    max-width: 1600px;
+    padding-top: 2rem;
+    padding-left: 2rem;
+    padding-right: 2rem;
+}
+
+.small-muted {
+    color: #6b7280;
+    font-size: 0.85rem;
+}
+
+.sidebar-project-title {
+    font-weight: 600;
+    font-size: 0.96rem;
+    margin-top: 0.25rem;
+    margin-bottom: 0.15rem;
+}
+
+.sidebar-section-label {
+    color: #6b7280;
+    font-size: 0.82rem;
+    margin-top: 0.5rem;
+    margin-bottom: 0.35rem;
+    text-transform: uppercase;
+    letter-spacing: 0.03em;
+}
+
+.sidebar-item-card {
+    border: 1px solid #e5e7eb;
+    border-radius: 10px;
+    padding: 8px 10px;
+    background: #ffffff;
+    margin-bottom: 8px;
+}
+
+.sidebar-project-card {
+    border: 1px solid #e5e7eb;
+    border-radius: 10px;
+    padding: 10px 12px;
+    background: #fafafa;
+    margin-bottom: 10px;
+}
+</style>
+""", unsafe_allow_html=True)
 
 # ------------------------------
 # Session state init
 # ------------------------------
-if "generated_type" not in st.session_state:
-    st.session_state.generated_type = None
+def init_session_state():
+    defaults = {
+        "generated_type": None,
+        "generated_text": "",
+        "generated_df": None,
+        "generated_title": "",
+        "generated_base_name": "",
+        "generated_sheet_name": "",
+        "history": [],
+        "flow_generated_text": "",
+        "flow_generated_title": "",
+        "flow_generated_df": None,
+        "flow_generated_base_name": "",
+        "flow_uploaded_name": "",
+        "projects": {"General": []},
+        "selected_project": "General",
+    }
 
-if "generated_text" not in st.session_state:
-    st.session_state.generated_text = ""
+    for key, value in defaults.items():
+        if key not in st.session_state:
+            st.session_state[key] = value
 
-if "generated_df" not in st.session_state:
-    st.session_state.generated_df = None
-
-if "generated_title" not in st.session_state:
-    st.session_state.generated_title = ""
-
-if "generated_base_name" not in st.session_state:
-    st.session_state.generated_base_name = ""
-
-if "generated_sheet_name" not in st.session_state:
-    st.session_state.generated_sheet_name = ""
-
-if "history" not in st.session_state:
-    st.session_state.history = []
-
-if "flow_generated_text" not in st.session_state:
-    st.session_state.flow_generated_text = ""
-
-if "flow_generated_title" not in st.session_state:
-    st.session_state.flow_generated_title = ""
-
-if "flow_generated_df" not in st.session_state:
-    st.session_state.flow_generated_df = None
-
-if "flow_generated_base_name" not in st.session_state:
-    st.session_state.flow_generated_base_name = ""
-
-if "flow_uploaded_name" not in st.session_state:
-    st.session_state.flow_uploaded_name = ""
+init_session_state()
 
 # ------------------------------
 # Helper functions
@@ -118,7 +158,6 @@ def convert_df_to_excel(df, sheet_name="AI_Output"):
 
     with pd.ExcelWriter(output, engine="openpyxl") as writer:
         df.to_excel(writer, index=False, sheet_name=sheet_name)
-
         worksheet = writer.sheets[sheet_name]
 
         header_fill = PatternFill(fill_type="solid", start_color="D9EAF7", end_color="D9EAF7")
@@ -133,7 +172,6 @@ def convert_df_to_excel(df, sheet_name="AI_Output"):
         for col_idx, column_cells in enumerate(worksheet.columns, start=1):
             max_length = 0
             col_letter = get_column_letter(col_idx)
-
             for cell in column_cells:
                 cell.alignment = wrap_alignment
                 try:
@@ -141,7 +179,6 @@ def convert_df_to_excel(df, sheet_name="AI_Output"):
                     max_length = max(max_length, len(cell_value))
                 except Exception:
                     pass
-
             adjusted_width = min(max(max_length + 2, 15), 50)
             worksheet.column_dimensions[col_letter].width = adjusted_width
 
@@ -151,20 +188,64 @@ def convert_df_to_excel(df, sheet_name="AI_Output"):
 
 def parse_json_response(content):
     content = content.strip()
-
     if content.startswith("```"):
         content = content.replace("```json", "").replace("```", "").strip()
-
     return json.loads(content)
 
 def add_to_history(output_type, title, pretty_text, df):
-    st.session_state.history.insert(0, {
+    record = {
         "type": output_type,
         "title": title,
         "text": pretty_text,
-        "df": df.copy() if df is not None else None
-    })
+        "df": df.copy() if df is not None else None,
+        "created_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    }
+
+    st.session_state.history.insert(0, record)
     st.session_state.history = st.session_state.history[:10]
+    save_to_project(record)
+
+def save_to_project(record):
+    selected_project = st.session_state.selected_project
+    if selected_project not in st.session_state.projects:
+        st.session_state.projects[selected_project] = []
+
+    project_record = {
+        "type": record["type"],
+        "title": record["title"],
+        "text": record["text"],
+        "df": record["df"].copy() if record["df"] is not None else None,
+        "created_at": record["created_at"]
+    }
+
+    st.session_state.projects[selected_project].insert(0, project_record)
+
+def load_project_item_into_current_output(item):
+    st.session_state.generated_type = item["type"]
+    st.session_state.generated_title = item["title"]
+    st.session_state.generated_text = item["text"]
+    st.session_state.generated_df = item["df"].copy() if item["df"] is not None else None
+    st.session_state.generated_base_name = safe_filename(item["title"])
+
+    if item["type"] == "Bug Report":
+        st.session_state.generated_sheet_name = "Bug_Report"
+    elif item["type"] == "Test Cases":
+        st.session_state.generated_sheet_name = "Test_Cases"
+    elif item["type"] == "Test Scenarios":
+        st.session_state.generated_sheet_name = "Test_Scenarios"
+    else:
+        st.session_state.generated_sheet_name = "AI_Output"
+
+def delete_project(project_name):
+    if project_name == "General":
+        return False, "You cannot delete the default General project."
+
+    if project_name in st.session_state.projects:
+        del st.session_state.projects[project_name]
+        st.session_state.selected_project = "General"
+        return True, f"Project '{project_name}' deleted."
+
+    return False, "Project not found."
 
 def get_default_jira_issue_type(output_type):
     mapping = {
@@ -281,18 +362,15 @@ Rules:
 
     if uploaded_file is not None:
         image_data_url = encode_uploaded_image(uploaded_file)
-
         response = client.chat.completions.create(
             model="gpt-4o-mini",
-            messages=[
-                {
-                    "role": "user",
-                    "content": [
-                        {"type": "text", "text": text_prompt},
-                        {"type": "image_url", "image_url": {"url": image_data_url}}
-                    ]
-                }
-            ]
+            messages=[{
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": text_prompt},
+                    {"type": "image_url", "image_url": {"url": image_data_url}}
+                ]
+            }]
         )
     else:
         response = client.chat.completions.create(
@@ -487,15 +565,13 @@ Rules:
 
         response = client.chat.completions.create(
             model="gpt-4o-mini",
-            messages=[
-                {
-                    "role": "user",
-                    "content": [
-                        {"type": "text", "text": prompt},
-                        {"type": "image_url", "image_url": {"url": image_data_url}}
-                    ]
-                }
-            ]
+            messages=[{
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": prompt},
+                    {"type": "image_url", "image_url": {"url": image_data_url}}
+                ]
+            }]
         )
         content = response.choices[0].message.content
 
@@ -510,34 +586,25 @@ Rules:
 
         response = client.responses.create(
             model="gpt-4.1",
-            input=[
-                {
-                    "role": "user",
-                    "content": [
-                        {"type": "input_text", "text": prompt},
-                        {"type": "input_file", "file_id": uploaded_pdf.id}
-                    ]
-                }
-            ]
+            input=[{
+                "role": "user",
+                "content": [
+                    {"type": "input_text", "text": prompt},
+                    {"type": "input_file", "file_id": uploaded_pdf.id}
+                ]
+            }]
         )
 
         content = response.output_text
-
     else:
         raise ValueError("Unsupported file type. Please upload PNG, JPG, JPEG, or PDF.")
 
     parsed = parse_json_response(content)
     req = parsed["requirements"]
 
-    steps_text = "\n".join(
-        [f"{idx + 1}. {step}" for idx, step in enumerate(req.get("What Happens from Start to Finish", []))]
-    )
-    decisions_text = "\n".join(
-        [f"- {item}" for item in req.get("Important Decisions", [])]
-    )
-    test_data_text = "\n".join(
-        [f"- {item}" for item in req.get("Test Data Needed", [])]
-    )
+    steps_text = "\n".join([f"{idx + 1}. {step}" for idx, step in enumerate(req.get("What Happens from Start to Finish", []))])
+    decisions_text = "\n".join([f"- {item}" for item in req.get("Important Decisions", [])])
+    test_data_text = "\n".join([f"- {item}" for item in req.get("Test Data Needed", [])])
 
     pretty_text = f"""Process Summary:
 {req.get('Process Summary', '')}
@@ -685,6 +752,93 @@ def render_history():
                 key=f"history_text_{idx}"
             )
             st.markdown("---")
+
+def render_sidebar_projects():
+    st.sidebar.markdown("### Projects")
+
+    new_project = st.sidebar.text_input(
+        "New project",
+        placeholder="Example: Salesforce Regression",
+        key="sidebar_new_project_name"
+    )
+
+    if st.sidebar.button("Add Project", use_container_width=True, key="sidebar_add_project_btn"):
+        project_name = new_project.strip()
+        if not project_name:
+            st.sidebar.warning("Enter a project name.")
+        elif project_name in st.session_state.projects:
+            st.sidebar.warning("Project already exists.")
+        else:
+            st.session_state.projects[project_name] = []
+            st.session_state.selected_project = project_name
+            st.rerun()
+
+    project_names = list(st.session_state.projects.keys())
+
+    selected_project = st.sidebar.selectbox(
+        "Select Project",
+        project_names,
+        index=project_names.index(st.session_state.selected_project) if st.session_state.selected_project in project_names else 0,
+        key="sidebar_selected_project_box"
+    )
+    st.session_state.selected_project = selected_project
+
+    col_a, col_b = st.sidebar.columns(2)
+    with col_a:
+        if st.button("Open", use_container_width=True, key="sidebar_open_project_btn"):
+            st.session_state.selected_project = selected_project
+    with col_b:
+        if st.button("Delete", use_container_width=True, key="sidebar_delete_project_btn"):
+            success, msg = delete_project(selected_project)
+            if success:
+                st.sidebar.success(msg)
+                st.rerun()
+            else:
+                st.sidebar.warning(msg)
+
+    project_items = st.session_state.projects.get(selected_project, [])
+
+    st.sidebar.markdown(
+        f"""
+        <div class="sidebar-project-card">
+            <div class="sidebar-project-title">{selected_project}</div>
+            <div class="small-muted">{len(project_items)} saved item(s)</div>
+        </div>
+        """,
+        unsafe_allow_html=True
+    )
+
+    st.sidebar.markdown('<div class="sidebar-section-label">Recent</div>', unsafe_allow_html=True)
+
+    if not project_items:
+        st.sidebar.caption("No saved items yet.")
+        return
+
+    for idx, item in enumerate(project_items[:20]):
+        st.sidebar.markdown(
+            f"""
+            <div class="sidebar-item-card">
+                <strong>{item['title']}</strong><br>
+                <span class="small-muted">{item['type']} • {item['created_at']}</span>
+            </div>
+            """,
+            unsafe_allow_html=True
+        )
+
+        open_col, delete_col = st.sidebar.columns(2)
+        with open_col:
+            if st.button("Open", key=f"sidebar_open_item_{selected_project}_{idx}", use_container_width=True):
+                load_project_item_into_current_output(item)
+                st.rerun()
+        with delete_col:
+            if st.button("Delete", key=f"sidebar_delete_item_{selected_project}_{idx}", use_container_width=True):
+                del st.session_state.projects[selected_project][idx]
+                st.rerun()
+
+# ------------------------------
+# Sidebar
+# ------------------------------
+render_sidebar_projects()
 
 # ------------------------------
 # Header
