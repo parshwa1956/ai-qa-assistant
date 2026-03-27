@@ -58,6 +58,11 @@ st.set_page_config(
 )
 
 # ------------------------------
+# Constants
+# ------------------------------
+PROJECTS_JSON_PATH = "qa_projects.json"
+
+# ------------------------------
 # Light layout tweak
 # ------------------------------
 st.markdown("""
@@ -109,9 +114,84 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 # ------------------------------
+# Persistence helpers
+# ------------------------------
+def df_to_records(df):
+    if df is None:
+        return None
+    return df.to_dict(orient="records")
+
+def records_to_df(records):
+    if not records:
+        return pd.DataFrame()
+    return pd.DataFrame(records)
+
+def serialize_project_item(item):
+    return {
+        "type": item.get("type", ""),
+        "title": item.get("title", ""),
+        "text": item.get("text", ""),
+        "df_records": df_to_records(item.get("df")),
+        "created_at": item.get("created_at", ""),
+    }
+
+def deserialize_project_item(item):
+    return {
+        "type": item.get("type", ""),
+        "title": item.get("title", ""),
+        "text": item.get("text", ""),
+        "df": records_to_df(item.get("df_records")),
+        "created_at": item.get("created_at", ""),
+    }
+
+def save_projects_to_file():
+    try:
+        serializable_projects = {}
+        for project_name, items in st.session_state.projects.items():
+            serializable_projects[project_name] = [serialize_project_item(item) for item in items]
+
+        payload = {
+            "selected_project": st.session_state.selected_project,
+            "projects": serializable_projects,
+        }
+
+        with open(PROJECTS_JSON_PATH, "w", encoding="utf-8") as f:
+            json.dump(payload, f, indent=2, ensure_ascii=False)
+    except Exception as e:
+        st.warning(f"Could not save projects to file: {e}")
+
+def load_projects_from_file():
+    if not os.path.exists(PROJECTS_JSON_PATH):
+        return {"General": []}, "General"
+
+    try:
+        with open(PROJECTS_JSON_PATH, "r", encoding="utf-8") as f:
+            payload = json.load(f)
+
+        raw_projects = payload.get("projects", {})
+        selected_project = payload.get("selected_project", "General")
+
+        projects = {}
+        for project_name, items in raw_projects.items():
+            projects[project_name] = [deserialize_project_item(item) for item in items]
+
+        if "General" not in projects:
+            projects["General"] = []
+
+        if selected_project not in projects:
+            selected_project = "General"
+
+        return projects, selected_project
+
+    except Exception:
+        return {"General": []}, "General"
+
+# ------------------------------
 # Session state init
 # ------------------------------
 def init_session_state():
+    loaded_projects, loaded_selected_project = load_projects_from_file()
+
     defaults = {
         "generated_type": None,
         "generated_text": "",
@@ -125,8 +205,8 @@ def init_session_state():
         "flow_generated_df": None,
         "flow_generated_base_name": "",
         "flow_uploaded_name": "",
-        "projects": {"General": []},
-        "selected_project": "General",
+        "projects": loaded_projects,
+        "selected_project": loaded_selected_project,
     }
 
     for key, value in defaults.items():
@@ -219,6 +299,7 @@ def save_to_project(record):
     }
 
     st.session_state.projects[selected_project].insert(0, project_record)
+    save_projects_to_file()
 
 def load_project_item_into_current_output(item):
     st.session_state.generated_type = item["type"]
@@ -243,6 +324,7 @@ def delete_project(project_name):
     if project_name in st.session_state.projects:
         del st.session_state.projects[project_name]
         st.session_state.selected_project = "General"
+        save_projects_to_file()
         return True, f"Project '{project_name}' deleted."
 
     return False, "Project not found."
@@ -313,7 +395,7 @@ def create_jira_issue(summary, description, issue_type="Task", labels=None):
         }
     }
 
-    response = requests.post(url, json=payload, headers=headers, auth=auth)
+    response = requests.post(url, json=payload, headers=headers, auth=auth, timeout=60)
 
     if response.status_code in [200, 201]:
         data = response.json()
@@ -771,6 +853,7 @@ def render_sidebar_projects():
         else:
             st.session_state.projects[project_name] = []
             st.session_state.selected_project = project_name
+            save_projects_to_file()
             st.rerun()
 
     project_names = list(st.session_state.projects.keys())
@@ -787,6 +870,7 @@ def render_sidebar_projects():
     with col_a:
         if st.button("Open", use_container_width=True, key="sidebar_open_project_btn"):
             st.session_state.selected_project = selected_project
+            save_projects_to_file()
     with col_b:
         if st.button("Delete", use_container_width=True, key="sidebar_delete_project_btn"):
             success, msg = delete_project(selected_project)
@@ -833,6 +917,7 @@ def render_sidebar_projects():
         with delete_col:
             if st.button("Delete", key=f"sidebar_delete_item_{selected_project}_{idx}", use_container_width=True):
                 del st.session_state.projects[selected_project][idx]
+                save_projects_to_file()
                 st.rerun()
 
 # ------------------------------
