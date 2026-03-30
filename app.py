@@ -1254,9 +1254,6 @@ def render_sidebar_projects(user):
 # Auth screen
 # ------------------------------
 def render_auth_screen():
-    st.markdown('<div class="auth-wrap">', unsafe_allow_html=True)
-    st.markdown('<div class="auth-card">', unsafe_allow_html=True)
-
     st.title("Kaldi QA")
     st.caption("AI-powered test case generation and QA automation")
     st.write("Generate bug reports, test cases, high-level test scenarios, and flow-based requirements using AI.")
@@ -1348,10 +1345,6 @@ def render_auth_screen():
                         st.success("Password reset email sent. Please check your inbox.")
                     except Exception as e:
                         st.error(f"Could not send reset email: {auth_error_text(e)}")
-
-    st.markdown("</div>", unsafe_allow_html=True)
-    st.markdown("</div>", unsafe_allow_html=True)
-
 # ------------------------------
 # Main app UI
 # ------------------------------
