@@ -1206,10 +1206,7 @@ def render_sidebar_projects(user):
 def render_auth_screen():
     st.markdown('<div class="auth-wrap">', unsafe_allow_html=True)
     st.markdown('<div class="auth-card">', unsafe_allow_html=True)
-    st.title("AI QA Assistant")
-    st.write("Generate bug reports, test cases, high-level test scenarios, and flow-based requirements using AI.")
-
-    if st.session_state.get("user"):
+       if st.session_state.get("user"):
         with st.expander("Set new password"):
             with st.form("update_password_form"):
                 new_password = st.text_input("New password", type="password", key="new_password")
