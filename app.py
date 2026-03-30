@@ -27,20 +27,6 @@ st.set_page_config(
     layout="wide",
 )
 
-st.markdown(
-    """
-    <h1 style='margin-bottom:0;'>Kaldi QA</h1>
-    <p style='font-size:18px; color:#666; margin-top:0;'>
-        AI-powered test case generation and QA automation
-    </p>
-    <p style='font-size:15px; color:#888;'>
-        Generate bug reports, test cases, high-level test scenarios, and flow-based requirements using AI.
-    </p>
-    """,
-    unsafe_allow_html=True
-)
-
-
 # ------------------------------
 # Clients / secrets
 # ------------------------------
@@ -49,6 +35,7 @@ def get_secret_or_env(name: str, default=None):
         return st.secrets[name]
     except Exception:
         return os.getenv(name, default)
+
 
 OPENAI_API_KEY = get_secret_or_env("OPENAI_API_KEY")
 SUPABASE_URL = get_secret_or_env("SUPABASE_URL")
@@ -69,16 +56,19 @@ if not SUPABASE_URL or not SUPABASE_KEY:
 
 client = OpenAI(api_key=OPENAI_API_KEY)
 
+
 @st.cache_resource
 def get_supabase() -> Client:
     return create_client(SUPABASE_URL, SUPABASE_KEY)
+
 
 supabase = get_supabase()
 
 # ------------------------------
 # Light layout tweak
 # ------------------------------
-st.markdown("""
+st.markdown(
+    """
 <style>
 .block-container {
     max-width: 1600px;
@@ -125,7 +115,7 @@ st.markdown("""
 }
 
 .auth-wrap {
-    max-width: 480px;
+    max-width: 560px;
     margin: 0 auto;
     padding-top: 40px;
 }
@@ -138,7 +128,9 @@ st.markdown("""
     box-shadow: 0 1px 10px rgba(0,0,0,0.03);
 }
 </style>
-""", unsafe_allow_html=True)
+""",
+    unsafe_allow_html=True,
+)
 
 # ------------------------------
 # Session state init
@@ -165,6 +157,7 @@ def init_session_state():
         if key not in st.session_state:
             st.session_state[key] = value
 
+
 init_session_state()
 
 # ------------------------------
@@ -175,6 +168,7 @@ def safe_filename(text):
     cleaned = cleaned.strip().replace(" ", "_").lower()
     return cleaned if cleaned else "ai_output"
 
+
 def encode_uploaded_image(uploaded_file):
     file_bytes = uploaded_file.read()
     uploaded_file.seek(0)
@@ -182,8 +176,10 @@ def encode_uploaded_image(uploaded_file):
     mime_type = uploaded_file.type
     return f"data:{mime_type};base64,{encoded}"
 
+
 def convert_df_to_csv(df):
     return df.to_csv(index=False).encode("utf-8")
+
 
 def convert_df_to_excel(df, sheet_name="AI_Output"):
     output = BytesIO()
@@ -218,26 +214,31 @@ def convert_df_to_excel(df, sheet_name="AI_Output"):
 
     return output.getvalue()
 
+
 def parse_json_response(content):
     content = content.strip()
     if content.startswith("```"):
         content = content.replace("```json", "").replace("```", "").strip()
     return json.loads(content)
 
+
 def item_matches_search(item, search_term: str):
     if not search_term:
         return True
 
     search_term = search_term.lower().strip()
-    haystack = " ".join([
-        str(item.get("title", "")),
-        str(item.get("item_type", "")),
-        str(item.get("output_text", ""))[:2000],
-        str(item.get("source_filename", "")),
-        str(item.get("input_context", ""))[:1000],
-    ]).lower()
+    haystack = " ".join(
+        [
+            str(item.get("title", "")),
+            str(item.get("item_type", "")),
+            str(item.get("output_text", ""))[:2000],
+            str(item.get("source_filename", "")),
+            str(item.get("input_context", ""))[:1000],
+        ]
+    ).lower()
 
     return search_term in haystack
+
 
 def now_iso():
     return datetime.now(timezone.utc).isoformat()
@@ -246,27 +247,26 @@ def now_iso():
 # Auth helpers
 # ------------------------------
 def sign_up_user(email: str, password: str):
-    return supabase.auth.sign_up({
-        "email": email,
-        "password": password
-    })
+    return supabase.auth.sign_up({"email": email, "password": password})
+
 
 def sign_in_user(email: str, password: str):
-    return supabase.auth.sign_in_with_password({
-        "email": email,
-        "password": password
-    })
+    return supabase.auth.sign_in_with_password({"email": email, "password": password})
+
 
 PASSWORD_RESET_REDIRECT = get_secret_or_env("PASSWORD_RESET_REDIRECT", "http://localhost:8501")
+
 
 def send_password_reset_email(email: str):
     return supabase.auth.reset_password_for_email(
         email,
-        {"redirect_to": PASSWORD_RESET_REDIRECT}
+        {"redirect_to": PASSWORD_RESET_REDIRECT},
     )
+
 
 def update_logged_in_user_password(new_password: str):
     return supabase.auth.update_user({"password": new_password})
+
 
 def auth_error_text(exc: Exception) -> str:
     text = str(exc)
@@ -282,6 +282,7 @@ def auth_error_text(exc: Exception) -> str:
         return "Invalid Supabase configuration. Please check your Supabase URL and key in secrets.toml."
     return text
 
+
 def sign_out_user():
     try:
         supabase.auth.sign_out()
@@ -291,6 +292,7 @@ def sign_out_user():
     for key in list(st.session_state.keys()):
         del st.session_state[key]
     init_session_state()
+
 
 def load_user_from_existing_session():
     try:
@@ -303,6 +305,7 @@ def load_user_from_existing_session():
     except Exception:
         pass
 
+
 def handle_login_success(auth_response):
     if getattr(auth_response, "user", None):
         st.session_state.user = auth_response.user
@@ -312,6 +315,7 @@ def handle_login_success(auth_response):
     upsert_profile(st.session_state.user)
     ensure_default_project(st.session_state.user.id)
     st.rerun()
+
 # ------------------------------
 # Database helpers
 # ------------------------------
@@ -324,6 +328,7 @@ def upsert_profile(user):
     }
     return supabase.table("profiles").upsert(payload).execute()
 
+
 def ensure_default_project(user_id: str):
     resp = (
         supabase.table("projects")
@@ -335,20 +340,30 @@ def ensure_default_project(user_id: str):
     )
     rows = resp.data or []
     if not rows:
-        supabase.table("projects").insert({
-            "user_id": user_id,
-            "name": "General",
-            "created_at": now_iso(),
-            "updated_at": now_iso(),
-        }).execute()
+        supabase.table("projects").insert(
+            {
+                "user_id": user_id,
+                "name": "General",
+                "created_at": now_iso(),
+                "updated_at": now_iso(),
+            }
+        ).execute()
+
 
 def create_project(user_id: str, name: str):
-    return supabase.table("projects").insert({
-        "user_id": user_id,
-        "name": name.strip(),
-        "created_at": now_iso(),
-        "updated_at": now_iso(),
-    }).execute()
+    return (
+        supabase.table("projects")
+        .insert(
+            {
+                "user_id": user_id,
+                "name": name.strip(),
+                "created_at": now_iso(),
+                "updated_at": now_iso(),
+            }
+        )
+        .execute()
+    )
+
 
 def get_projects(user_id: str):
     return (
@@ -359,17 +374,21 @@ def get_projects(user_id: str):
         .execute()
     )
 
+
 def rename_project(project_id: str, user_id: str, new_name: str):
     return (
         supabase.table("projects")
-        .update({
-            "name": new_name.strip(),
-            "updated_at": now_iso(),
-        })
+        .update(
+            {
+                "name": new_name.strip(),
+                "updated_at": now_iso(),
+            }
+        )
         .eq("id", project_id)
         .eq("user_id", user_id)
         .execute()
     )
+
 
 def get_project_by_id(project_id: str, user_id: str):
     resp = (
@@ -382,6 +401,7 @@ def get_project_by_id(project_id: str, user_id: str):
     )
     rows = resp.data or []
     return rows[0] if rows else None
+
 
 def delete_project(project_id: str, user_id: str):
     project = get_project_by_id(project_id, user_id)
@@ -413,6 +433,7 @@ def delete_project(project_id: str, user_id: str):
 
     return True, f"Project '{project['name']}' deleted."
 
+
 def save_item(
     user_id: str,
     project_id: str,
@@ -423,9 +444,7 @@ def save_item(
     screenshot_path: str = None,
     source_filename: str = None,
 ):
-    supabase.table("projects").update({
-        "updated_at": now_iso()
-    }).eq("id", project_id).eq("user_id", user_id).execute()
+    supabase.table("projects").update({"updated_at": now_iso()}).eq("id", project_id).eq("user_id", user_id).execute()
 
     payload = {
         "user_id": user_id,
@@ -440,6 +459,7 @@ def save_item(
     }
     return supabase.table("saved_items").insert(payload).execute()
 
+
 def get_project_items(user_id: str, project_id: str):
     resp = (
         supabase.table("saved_items")
@@ -451,6 +471,7 @@ def get_project_items(user_id: str, project_id: str):
     )
     return resp.data or []
 
+
 def get_recent_items(user_id: str, limit: int = 10):
     resp = (
         supabase.table("saved_items")
@@ -461,6 +482,7 @@ def get_recent_items(user_id: str, limit: int = 10):
         .execute()
     )
     return resp.data or []
+
 
 def delete_project_item(user_id: str, item_id: str):
     item_resp = (
@@ -483,6 +505,7 @@ def delete_project_item(user_id: str, item_id: str):
             pass
 
     supabase.table("saved_items").delete().eq("id", item_id).eq("user_id", user_id).execute()
+
 
 def get_item_df(item):
     item_type = item.get("item_type", "")
@@ -519,9 +542,10 @@ def upload_screenshot_to_storage(user_id: str, project_id: str, uploaded_file):
     supabase.storage.from_("screenshots").upload(
         path=storage_path,
         file=file_bytes,
-        file_options={"content-type": uploaded_file.type}
+        file_options={"content-type": uploaded_file.type},
     )
     return storage_path
+
 
 def get_signed_screenshot_url(storage_path: str, expires_in: int = 3600):
     if not storage_path:
@@ -541,49 +565,53 @@ def get_default_jira_issue_type(output_type):
     mapping = {
         "Bug Report": "Bug",
         "Test Cases": "Task",
-        "Test Scenarios": "Story"
+        "Test Scenarios": "Story",
     }
     return mapping.get(output_type, "Task")
+
 
 def get_default_jira_labels(output_type):
     mapping = {
         "Bug Report": ["bug"],
         "Test Cases": ["task"],
-        "Test Scenarios": ["story"]
+        "Test Scenarios": ["story"],
     }
     return mapping.get(output_type, ["task"])
+
 
 def build_jira_description_doc(description_text):
     lines = [line.strip() for line in description_text.splitlines() if line.strip()]
 
     content_blocks = []
     for line in lines:
-        content_blocks.append({
-            "type": "paragraph",
-            "content": [{"type": "text", "text": line[:3000]}]
-        })
+        content_blocks.append(
+            {
+                "type": "paragraph",
+                "content": [{"type": "text", "text": line[:3000]}],
+            }
+        )
 
     if not content_blocks:
-        content_blocks = [{
-            "type": "paragraph",
-            "content": [{"type": "text", "text": "No description provided."}]
-        }]
+        content_blocks = [
+            {
+                "type": "paragraph",
+                "content": [{"type": "text", "text": "No description provided."}],
+            }
+        ]
 
     return {
         "type": "doc",
         "version": 1,
-        "content": content_blocks
+        "content": content_blocks,
     }
+
 
 def create_jira_issue(summary, description, issue_type="Task", labels=None):
     if not all([JIRA_BASE_URL, JIRA_EMAIL, JIRA_API_TOKEN, JIRA_PROJECT_KEY]):
         return False, "Jira settings are missing in Streamlit secrets or .env."
 
     url = f"{JIRA_BASE_URL}/rest/api/3/issue"
-    headers = {
-        "Accept": "application/json",
-        "Content-Type": "application/json"
-    }
+    headers = {"Accept": "application/json", "Content-Type": "application/json"}
     auth = (JIRA_EMAIL, JIRA_API_TOKEN)
 
     payload = {
@@ -592,7 +620,7 @@ def create_jira_issue(summary, description, issue_type="Task", labels=None):
             "summary": summary,
             "description": build_jira_description_doc(description),
             "issuetype": {"name": issue_type},
-            "labels": labels or []
+            "labels": labels or [],
         }
     }
 
@@ -641,18 +669,20 @@ Use this exact JSON structure:
         image_data_url = encode_uploaded_image(uploaded_file)
         response = client.chat.completions.create(
             model="gpt-4o-mini",
-            messages=[{
-                "role": "user",
-                "content": [
-                    {"type": "text", "text": text_prompt},
-                    {"type": "image_url", "image_url": {"url": image_data_url}}
-                ]
-            }]
+            messages=[
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "text", "text": text_prompt},
+                        {"type": "image_url", "image_url": {"url": image_data_url}},
+                    ],
+                }
+            ],
         )
     else:
         response = client.chat.completions.create(
             model="gpt-4o-mini",
-            messages=[{"role": "user", "content": text_prompt}]
+            messages=[{"role": "user", "content": text_prompt}],
         )
 
     content = response.choices[0].message.content
@@ -663,6 +693,7 @@ Use this exact JSON structure:
     df = pd.DataFrame([bug_report])
 
     return pretty_text, df
+
 
 def generate_test_cases(title, context):
     prompt = f"""
@@ -696,7 +727,7 @@ Use this exact JSON structure:
 
     response = client.chat.completions.create(
         model="gpt-4o-mini",
-        messages=[{"role": "user", "content": prompt}]
+        messages=[{"role": "user", "content": prompt}],
     )
 
     content = response.choices[0].message.content
@@ -721,6 +752,7 @@ Type: {tc.get('Type', '')}
     df = pd.DataFrame(test_cases)
 
     return pretty_text, df
+
 
 def generate_test_scenarios(title, context):
     prompt = f"""
@@ -752,7 +784,7 @@ Use this exact JSON structure:
 
     response = client.chat.completions.create(
         model="gpt-4o-mini",
-        messages=[{"role": "user", "content": prompt}]
+        messages=[{"role": "user", "content": prompt}],
     )
 
     content = response.choices[0].message.content
@@ -776,6 +808,7 @@ Notes: {sc.get('Notes', '')}
 
     return pretty_text, df
 
+
 def reset_flow_output_if_new_file(uploaded_flow):
     if uploaded_flow is None:
         return
@@ -786,6 +819,7 @@ def reset_flow_output_if_new_file(uploaded_flow):
         st.session_state.flow_generated_df = None
         st.session_state.flow_generated_base_name = ""
         st.session_state.flow_uploaded_name = uploaded_flow.name
+
 
 def generate_requirements_from_flow(uploaded_flow):
     prompt = """
@@ -822,13 +856,15 @@ Use this exact JSON structure:
 
         response = client.chat.completions.create(
             model="gpt-4o-mini",
-            messages=[{
-                "role": "user",
-                "content": [
-                    {"type": "text", "text": prompt},
-                    {"type": "image_url", "image_url": {"url": image_data_url}}
-                ]
-            }]
+            messages=[
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "text", "text": prompt},
+                        {"type": "image_url", "image_url": {"url": image_data_url}},
+                    ],
+                }
+            ],
         )
         content = response.choices[0].message.content
 
@@ -838,18 +874,20 @@ Use this exact JSON structure:
 
         uploaded_pdf = client.files.create(
             file=(uploaded_flow.name, file_bytes, "application/pdf"),
-            purpose="user_data"
+            purpose="user_data",
         )
 
         response = client.responses.create(
             model="gpt-4.1",
-            input=[{
-                "role": "user",
-                "content": [
-                    {"type": "input_text", "text": prompt},
-                    {"type": "input_file", "file_id": uploaded_pdf.id}
-                ]
-            }]
+            input=[
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "input_text", "text": prompt},
+                        {"type": "input_file", "file_id": uploaded_pdf.id},
+                    ],
+                }
+            ],
         )
 
         content = response.output_text
@@ -876,12 +914,16 @@ Test Data Needed:
 {test_data_text}
 """
 
-    df = pd.DataFrame([{
-        "Process Summary": req.get("Process Summary", ""),
-        "What Happens from Start to Finish": steps_text,
-        "Important Decisions": decisions_text,
-        "Test Data Needed": test_data_text
-    }])
+    df = pd.DataFrame(
+        [
+            {
+                "Process Summary": req.get("Process Summary", ""),
+                "What Happens from Start to Finish": steps_text,
+                "Important Decisions": decisions_text,
+                "Test Data Needed": test_data_text,
+            }
+        ]
+    )
 
     return pretty_text, df
 
@@ -900,7 +942,7 @@ def show_download_buttons(df, pretty_text, base_name, sheet_name):
             data=pretty_text,
             file_name=f"{base_name}.txt",
             mime="text/plain",
-            use_container_width=True
+            use_container_width=True,
         )
 
     with col2:
@@ -909,7 +951,7 @@ def show_download_buttons(df, pretty_text, base_name, sheet_name):
             data=csv_data,
             file_name=f"{base_name}.csv",
             mime="text/csv",
-            use_container_width=True
+            use_container_width=True,
         )
 
     with col3:
@@ -918,8 +960,9 @@ def show_download_buttons(df, pretty_text, base_name, sheet_name):
             data=excel_data,
             file_name=f"{base_name}.xlsx",
             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-            use_container_width=True
+            use_container_width=True,
         )
+
 
 def set_current_output(output_type, title, result_text, df, base_name, sheet_name):
     st.session_state.generated_type = output_type
@@ -928,6 +971,7 @@ def set_current_output(output_type, title, result_text, df, base_name, sheet_nam
     st.session_state.generated_df = df
     st.session_state.generated_base_name = base_name
     st.session_state.generated_sheet_name = sheet_name
+
 
 def load_project_item_into_current_output(item):
     output_type = item.get("item_type", "")
@@ -950,6 +994,7 @@ def load_project_item_into_current_output(item):
     st.session_state.generated_base_name = safe_filename(title)
     st.session_state.generated_sheet_name = sheet_name
 
+
 def render_current_output():
     if st.session_state.generated_type and st.session_state.generated_df is not None:
         output_type = st.session_state.generated_type
@@ -966,7 +1011,7 @@ def render_current_output():
             "Copy Output",
             value=result_text,
             height=280,
-            key=f"copy_output_{output_type}"
+            key=f"copy_output_{output_type}",
         )
 
         show_download_buttons(df, result_text, base_name, sheet_name)
@@ -983,7 +1028,7 @@ def render_current_output():
             "Issue Type",
             issue_type_options,
             index=default_index,
-            key=f"jira_issue_type_{output_type}"
+            key=f"jira_issue_type_{output_type}",
         )
 
         if st.button("Create in Jira", use_container_width=True, key=f"create_jira_{output_type}"):
@@ -992,7 +1037,7 @@ def render_current_output():
                     summary=generated_title,
                     description=result_text,
                     issue_type=jira_issue_type,
-                    labels=default_labels
+                    labels=default_labels,
                 )
 
             if success:
@@ -1003,6 +1048,7 @@ def render_current_output():
             else:
                 st.error(f"Failed to create Jira issue: {message}")
 
+
 def render_flow_output():
     if st.session_state.flow_generated_df is not None:
         st.subheader("Generated Requirements")
@@ -1012,15 +1058,16 @@ def render_flow_output():
             "Copy Output",
             value=st.session_state.flow_generated_text,
             height=320,
-            key="copy_output_flow_requirements"
+            key="copy_output_flow_requirements",
         )
 
         show_download_buttons(
             st.session_state.flow_generated_df,
             st.session_state.flow_generated_text,
             st.session_state.flow_generated_base_name,
-            "Flow_Requirements"
+            "Flow_Requirements",
         )
+
 
 def render_recent_history(user_id: str):
     items = get_recent_items(user_id, limit=10)
@@ -1039,13 +1086,17 @@ def render_recent_history(user_id: str):
             if screenshot_path:
                 signed_url = get_signed_screenshot_url(screenshot_path)
                 if signed_url:
-                    st.image(signed_url, caption=f"Saved screenshot • {item.get('source_filename') or ''}", use_container_width=True)
+                    st.image(
+                        signed_url,
+                        caption=f"Saved screenshot • {item.get('source_filename') or ''}",
+                        use_container_width=True,
+                    )
 
             st.text_area(
                 f"History Output {idx}",
                 value=item.get("output_text", ""),
                 height=180,
-                key=f"history_text_{idx}"
+                key=f"history_text_{idx}",
             )
             st.markdown("---")
 
@@ -1065,7 +1116,7 @@ def render_sidebar_projects(user):
     new_project = st.sidebar.text_input(
         "New project",
         placeholder="Example: Salesforce Regression",
-        key="sidebar_new_project_name"
+        key="sidebar_new_project_name",
     )
 
     if st.sidebar.button("Add Project", use_container_width=True, key="sidebar_add_project_btn"):
@@ -1105,7 +1156,7 @@ def render_sidebar_projects(user):
         "Select Project",
         project_names,
         index=current_index,
-        key="sidebar_selected_project_box"
+        key="sidebar_selected_project_box",
     )
 
     selected_project = next((p for p in projects if p["name"] == selected_name), projects[0])
@@ -1114,7 +1165,7 @@ def render_sidebar_projects(user):
     rename_value = st.sidebar.text_input(
         "Rename selected project",
         value="" if selected_project["name"] == "General" else selected_project["name"],
-        key="sidebar_rename_project_value"
+        key="sidebar_rename_project_value",
     )
 
     rename_col, delete_col = st.sidebar.columns(2)
@@ -1152,13 +1203,13 @@ def render_sidebar_projects(user):
             <div class="small-muted">Updated: {selected_project.get('updated_at', '-') or '-'}</div>
         </div>
         """,
-        unsafe_allow_html=True
+        unsafe_allow_html=True,
     )
 
     search_term = st.sidebar.text_input(
         "Search saved items",
         placeholder="Search title, type, text...",
-        key="sidebar_search_items"
+        key="sidebar_search_items",
     )
 
     st.sidebar.markdown('<div class="sidebar-section-label">Recent</div>', unsafe_allow_html=True)
@@ -1178,7 +1229,7 @@ def render_sidebar_projects(user):
                 <span class="small-muted">{item.get('source_filename') or ''}</span>
             </div>
             """,
-            unsafe_allow_html=True
+            unsafe_allow_html=True,
         )
 
         screenshot_path = item.get("screenshot_path")
@@ -1202,13 +1253,13 @@ def render_sidebar_projects(user):
 # ------------------------------
 # Auth screen
 # ------------------------------
-
 def render_auth_screen():
     st.markdown('<div class="auth-wrap">', unsafe_allow_html=True)
     st.markdown('<div class="auth-card">', unsafe_allow_html=True)
+
     st.title("Kaldi QA")
-st.caption("AI-powered test case generation and QA automation")
-st.write("Generate bug reports, test cases, high-level test scenarios, and flow-based requirements using AI.")
+    st.caption("AI-powered test case generation and QA automation")
+    st.write("Generate bug reports, test cases, high-level test scenarios, and flow-based requirements using AI.")
 
     if st.session_state.get("user"):
         with st.expander("Set new password"):
@@ -1298,8 +1349,8 @@ st.write("Generate bug reports, test cases, high-level test scenarios, and flow-
                     except Exception as e:
                         st.error(f"Could not send reset email: {auth_error_text(e)}")
 
-    st.markdown('</div>', unsafe_allow_html=True)
-    st.markdown('</div>', unsafe_allow_html=True)
+    st.markdown("</div>", unsafe_allow_html=True)
+    st.markdown("</div>", unsafe_allow_html=True)
 
 # ------------------------------
 # Main app UI
@@ -1312,7 +1363,8 @@ def render_main_app():
 
     projects, selected_project, project_items = render_sidebar_projects(user)
 
-    st.title("AI QA Assistant")
+    st.title("Kaldi QA")
+    st.caption("AI-powered test case generation and QA automation")
     st.write("Generate bug reports, test cases, high-level test scenarios, and flow-based requirements using AI.")
 
     tab1, tab2 = st.tabs(["QA Generator", "Flow to Requirements"])
@@ -1320,19 +1372,19 @@ def render_main_app():
     with tab1:
         title = st.text_input(
             "Title / Requirement / Feature *",
-            placeholder="Example: Login button not working on Safari mobile"
+            placeholder="Example: Login button not working on Safari mobile",
         )
 
         context = st.text_area(
             "Context / Business Requirement Details *",
             height=150,
-            placeholder="Paste bug details, requirement details, acceptance criteria, or observations here..."
+            placeholder="Paste bug details, requirement details, acceptance criteria, or observations here...",
         )
 
         uploaded_file = st.file_uploader(
             "Upload Screenshot (Optional)",
             type=["png", "jpg", "jpeg"],
-            key="qa_screenshot_upload"
+            key="qa_screenshot_upload",
         )
 
         if uploaded_file is not None:
@@ -1451,7 +1503,7 @@ def render_main_app():
         uploaded_flow = st.file_uploader(
             "Upload Flow Diagram",
             type=["png", "jpg", "jpeg", "pdf"],
-            key="flow_diagram_upload"
+            key="flow_diagram_upload",
         )
 
         if uploaded_flow is not None:
@@ -1466,7 +1518,7 @@ def render_main_app():
             "Generate Requirements",
             disabled=uploaded_flow is None,
             use_container_width=True,
-            key="generate_flow_requirements"
+            key="generate_flow_requirements",
         )
 
         if uploaded_flow is None:
