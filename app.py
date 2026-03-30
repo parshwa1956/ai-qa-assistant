@@ -22,10 +22,24 @@ load_dotenv()
 # Page config
 # ------------------------------
 st.set_page_config(
-    page_title="AI QA Assistant",
+    page_title="Kaldi QA",
     page_icon="🧪",
     layout="wide",
 )
+
+st.markdown(
+    """
+    <h1 style='margin-bottom:0;'>Kaldi QA</h1>
+    <p style='font-size:18px; color:#666; margin-top:0;'>
+        AI-powered test case generation and QA automation
+    </p>
+    <p style='font-size:15px; color:#888;'>
+        Generate bug reports, test cases, high-level test scenarios, and flow-based requirements using AI.
+    </p>
+    """,
+    unsafe_allow_html=True
+)
+
 
 # ------------------------------
 # Clients / secrets
