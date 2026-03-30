@@ -1,15 +1,15 @@
 import os
 import json
 import base64
-import shutil
 from io import BytesIO
-from datetime import datetime
+from datetime import datetime, timezone
 
 import pandas as pd
 import requests
 import streamlit as st
 from openai import OpenAI
 from dotenv import load_dotenv
+from supabase import create_client, Client
 from openpyxl.styles import Font, Alignment, PatternFill
 from openpyxl.utils import get_column_letter
 
@@ -17,37 +17,6 @@ from openpyxl.utils import get_column_letter
 # Load environment
 # ------------------------------
 load_dotenv()
-
-api_key = None
-try:
-    api_key = st.secrets["OPENAI_API_KEY"]
-except Exception:
-    api_key = os.getenv("OPENAI_API_KEY")
-
-if not api_key:
-    st.error("OpenAI API key not found. Add it in Streamlit secrets or local .env file.")
-    st.stop()
-
-client = OpenAI(api_key=api_key)
-
-# ------------------------------
-# Load Jira settings
-# ------------------------------
-jira_base_url = None
-jira_email = None
-jira_api_token = None
-jira_project_key = None
-
-try:
-    jira_base_url = st.secrets["JIRA_BASE_URL"]
-    jira_email = st.secrets["JIRA_EMAIL"]
-    jira_api_token = st.secrets["JIRA_API_TOKEN"]
-    jira_project_key = st.secrets["JIRA_PROJECT_KEY"]
-except Exception:
-    jira_base_url = os.getenv("JIRA_BASE_URL")
-    jira_email = os.getenv("JIRA_EMAIL")
-    jira_api_token = os.getenv("JIRA_API_TOKEN")
-    jira_project_key = os.getenv("JIRA_PROJECT_KEY")
 
 # ------------------------------
 # Page config
@@ -59,10 +28,38 @@ st.set_page_config(
 )
 
 # ------------------------------
-# Constants
+# Clients / secrets
 # ------------------------------
-PROJECTS_JSON_PATH = "qa_projects.json"
-PROJECT_ASSETS_DIR = "project_assets"
+def get_secret_or_env(name: str, default=None):
+    try:
+        return st.secrets[name]
+    except Exception:
+        return os.getenv(name, default)
+
+OPENAI_API_KEY = get_secret_or_env("OPENAI_API_KEY")
+SUPABASE_URL = get_secret_or_env("SUPABASE_URL")
+SUPABASE_KEY = get_secret_or_env("SUPABASE_KEY")
+
+JIRA_BASE_URL = get_secret_or_env("JIRA_BASE_URL")
+JIRA_EMAIL = get_secret_or_env("JIRA_EMAIL")
+JIRA_API_TOKEN = get_secret_or_env("JIRA_API_TOKEN")
+JIRA_PROJECT_KEY = get_secret_or_env("JIRA_PROJECT_KEY")
+
+if not OPENAI_API_KEY:
+    st.error("OPENAI_API_KEY not found in Streamlit secrets or .env.")
+    st.stop()
+
+if not SUPABASE_URL or not SUPABASE_KEY:
+    st.error("SUPABASE_URL or SUPABASE_KEY not found in Streamlit secrets or .env.")
+    st.stop()
+
+client = OpenAI(api_key=OPENAI_API_KEY)
+
+@st.cache_resource
+def get_supabase() -> Client:
+    return create_client(SUPABASE_URL, SUPABASE_KEY)
+
+supabase = get_supabase()
 
 # ------------------------------
 # Light layout tweak
@@ -112,211 +109,44 @@ st.markdown("""
     background: #fafafa;
     margin-bottom: 10px;
 }
+
+.auth-wrap {
+    max-width: 480px;
+    margin: 0 auto;
+    padding-top: 40px;
+}
+
+.auth-card {
+    border: 1px solid #e5e7eb;
+    border-radius: 16px;
+    padding: 24px;
+    background: #ffffff;
+    box-shadow: 0 1px 10px rgba(0,0,0,0.03);
+}
 </style>
 """, unsafe_allow_html=True)
-
-# ------------------------------
-# Filesystem helpers
-# ------------------------------
-def ensure_assets_dir():
-    os.makedirs(PROJECT_ASSETS_DIR, exist_ok=True)
-
-def project_folder_name(project_name: str) -> str:
-    return safe_filename(project_name)
-
-def get_project_asset_dir(project_name: str) -> str:
-    ensure_assets_dir()
-    folder = os.path.join(PROJECT_ASSETS_DIR, project_folder_name(project_name))
-    os.makedirs(folder, exist_ok=True)
-    return folder
-
-def save_uploaded_file_to_project(project_name: str, uploaded_file):
-    if uploaded_file is None:
-        return None
-
-    project_dir = get_project_asset_dir(project_name)
-    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    base = safe_filename(os.path.splitext(uploaded_file.name)[0])
-    ext = os.path.splitext(uploaded_file.name)[1] or ".bin"
-    filename = f"{timestamp}_{base}{ext}"
-    filepath = os.path.join(project_dir, filename)
-
-    file_bytes = uploaded_file.read()
-    uploaded_file.seek(0)
-
-    with open(filepath, "wb") as f:
-        f.write(file_bytes)
-
-    return filepath
-
-def move_project_asset_dir(old_project_name: str, new_project_name: str):
-    old_dir = os.path.join(PROJECT_ASSETS_DIR, project_folder_name(old_project_name))
-    new_dir = os.path.join(PROJECT_ASSETS_DIR, project_folder_name(new_project_name))
-
-    if not os.path.exists(old_dir):
-        os.makedirs(new_dir, exist_ok=True)
-        return
-
-    if os.path.exists(new_dir):
-        for name in os.listdir(old_dir):
-            src = os.path.join(old_dir, name)
-            dst = os.path.join(new_dir, name)
-            shutil.move(src, dst)
-        shutil.rmtree(old_dir, ignore_errors=True)
-    else:
-        shutil.move(old_dir, new_dir)
-
-def delete_project_asset_dir(project_name: str):
-    folder = os.path.join(PROJECT_ASSETS_DIR, project_folder_name(project_name))
-    if os.path.exists(folder):
-        shutil.rmtree(folder, ignore_errors=True)
-
-def delete_file_if_exists(filepath: str):
-    if filepath and os.path.exists(filepath):
-        try:
-            os.remove(filepath)
-        except Exception:
-            pass
-
-# ------------------------------
-# Persistence helpers
-# ------------------------------
-def df_to_records(df):
-    if df is None:
-        return None
-    return df.to_dict(orient="records")
-
-def records_to_df(records):
-    if not records:
-        return pd.DataFrame()
-    return pd.DataFrame(records)
-
-def serialize_project_item(item):
-    return {
-        "type": item.get("type", ""),
-        "title": item.get("title", ""),
-        "text": item.get("text", ""),
-        "df_records": df_to_records(item.get("df")),
-        "created_at": item.get("created_at", ""),
-        "screenshot_path": item.get("screenshot_path"),
-        "source_filename": item.get("source_filename"),
-    }
-
-def deserialize_project_item(item):
-    return {
-        "type": item.get("type", ""),
-        "title": item.get("title", ""),
-        "text": item.get("text", ""),
-        "df": records_to_df(item.get("df_records")),
-        "created_at": item.get("created_at", ""),
-        "screenshot_path": item.get("screenshot_path"),
-        "source_filename": item.get("source_filename"),
-    }
-
-def serialize_projects_state():
-    serializable_projects = {}
-
-    for project_name, project_data in st.session_state.projects.items():
-        if isinstance(project_data, dict):
-            items = project_data.get("items", [])
-            created_at = project_data.get("created_at", "")
-            updated_at = project_data.get("updated_at", "")
-        else:
-            items = project_data
-            created_at = ""
-            updated_at = ""
-
-        serializable_projects[project_name] = {
-            "created_at": created_at,
-            "updated_at": updated_at,
-            "items": [serialize_project_item(item) for item in items],
-        }
-
-    return {
-        "selected_project": st.session_state.selected_project,
-        "projects": serializable_projects,
-    }
-
-def save_projects_to_file():
-    try:
-        payload = serialize_projects_state()
-        with open(PROJECTS_JSON_PATH, "w", encoding="utf-8") as f:
-            json.dump(payload, f, indent=2, ensure_ascii=False)
-    except Exception as e:
-        st.warning(f"Could not save projects to file: {e}")
-
-def normalize_loaded_projects(raw_projects):
-    normalized = {}
-
-    for project_name, project_data in raw_projects.items():
-        # backward compatibility if older format was just a list
-        if isinstance(project_data, list):
-            normalized[project_name] = {
-                "created_at": "",
-                "updated_at": "",
-                "items": [deserialize_project_item(item) for item in project_data],
-            }
-        else:
-            normalized[project_name] = {
-                "created_at": project_data.get("created_at", ""),
-                "updated_at": project_data.get("updated_at", ""),
-                "items": [deserialize_project_item(item) for item in project_data.get("items", [])],
-            }
-
-    if "General" not in normalized:
-        now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        normalized["General"] = {"created_at": now_str, "updated_at": now_str, "items": []}
-
-    return normalized
-
-def load_projects_from_file():
-    if not os.path.exists(PROJECTS_JSON_PATH):
-        now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        return {
-            "General": {"created_at": now_str, "updated_at": now_str, "items": []}
-        }, "General"
-
-    try:
-        with open(PROJECTS_JSON_PATH, "r", encoding="utf-8") as f:
-            payload = json.load(f)
-
-        raw_projects = payload.get("projects", {})
-        selected_project = payload.get("selected_project", "General")
-        projects = normalize_loaded_projects(raw_projects)
-
-        if selected_project not in projects:
-            selected_project = "General"
-
-        return projects, selected_project
-    except Exception:
-        now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        return {
-            "General": {"created_at": now_str, "updated_at": now_str, "items": []}
-        }, "General"
 
 # ------------------------------
 # Session state init
 # ------------------------------
 def init_session_state():
-    loaded_projects, loaded_selected_project = load_projects_from_file()
-
     defaults = {
+        "user": None,
+        "access_token": None,
+        "selected_project_id": None,
         "generated_type": None,
         "generated_text": "",
         "generated_df": None,
         "generated_title": "",
         "generated_base_name": "",
         "generated_sheet_name": "",
-        "history": [],
         "flow_generated_text": "",
         "flow_generated_title": "",
         "flow_generated_df": None,
         "flow_generated_base_name": "",
         "flow_uploaded_name": "",
-        "projects": loaded_projects,
-        "selected_project": loaded_selected_project,
+        "auth_checked": False,
     }
-
     for key, value in defaults.items():
         if key not in st.session_state:
             st.session_state[key] = value
@@ -324,19 +154,19 @@ def init_session_state():
 init_session_state()
 
 # ------------------------------
-# Helper functions
+# Utility helpers
 # ------------------------------
+def safe_filename(text):
+    cleaned = "".join(c if c.isalnum() or c in (" ", "_", "-") else "" for c in text)
+    cleaned = cleaned.strip().replace(" ", "_").lower()
+    return cleaned if cleaned else "ai_output"
+
 def encode_uploaded_image(uploaded_file):
     file_bytes = uploaded_file.read()
     uploaded_file.seek(0)
     encoded = base64.b64encode(file_bytes).decode("utf-8")
     mime_type = uploaded_file.type
     return f"data:{mime_type};base64,{encoded}"
-
-def safe_filename(text):
-    cleaned = "".join(c if c.isalnum() or c in (" ", "_", "-") else "" for c in text)
-    cleaned = cleaned.strip().replace(" ", "_").lower()
-    return cleaned if cleaned else "ai_output"
 
 def convert_df_to_csv(df):
     return df.to_csv(index=False).encode("utf-8")
@@ -380,122 +210,319 @@ def parse_json_response(content):
         content = content.replace("```json", "").replace("```", "").strip()
     return json.loads(content)
 
-def add_to_history(output_type, title, pretty_text, df, screenshot_path=None, source_filename=None):
-    record = {
-        "type": output_type,
-        "title": title,
-        "text": pretty_text,
-        "df": df.copy() if df is not None else None,
-        "created_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-        "screenshot_path": screenshot_path,
-        "source_filename": source_filename,
+def item_matches_search(item, search_term: str):
+    if not search_term:
+        return True
+
+    search_term = search_term.lower().strip()
+    haystack = " ".join([
+        str(item.get("title", "")),
+        str(item.get("item_type", "")),
+        str(item.get("output_text", ""))[:2000],
+        str(item.get("source_filename", "")),
+        str(item.get("input_context", ""))[:1000],
+    ]).lower()
+
+    return search_term in haystack
+
+def now_iso():
+    return datetime.now(timezone.utc).isoformat()
+
+# ------------------------------
+# Auth helpers
+# ------------------------------
+def sign_up_user(email: str, password: str):
+    return supabase.auth.sign_up({
+        "email": email,
+        "password": password
+    })
+
+def sign_in_user(email: str, password: str):
+    return supabase.auth.sign_in_with_password({
+        "email": email,
+        "password": password
+    })
+
+PASSWORD_RESET_REDIRECT = get_secret_or_env("PASSWORD_RESET_REDIRECT", "http://localhost:8501")
+
+def send_password_reset_email(email: str):
+    return supabase.auth.reset_password_for_email(
+        email,
+        {"redirect_to": PASSWORD_RESET_REDIRECT}
+    )
+
+def update_logged_in_user_password(new_password: str):
+    return supabase.auth.update_user({"password": new_password})
+
+def auth_error_text(exc: Exception) -> str:
+    text = str(exc)
+    lower = text.lower()
+
+    if "invalid login credentials" in lower:
+        return "Unable to sign in. New user? Please use Sign Up. Already have an account? Use Forgot Password if needed."
+    if "email not confirmed" in lower:
+        return "Your account is created, but your email is not confirmed yet. Please check your inbox and confirm your email."
+    if "user already registered" in lower:
+        return "This account already exists. Please use Sign In or Forgot Password."
+    if "invalid api key" in lower:
+        return "Invalid Supabase configuration. Please check your Supabase URL and key in secrets.toml."
+    return text
+
+def sign_out_user():
+    try:
+        supabase.auth.sign_out()
+    except Exception:
+        pass
+
+    for key in list(st.session_state.keys()):
+        del st.session_state[key]
+    init_session_state()
+
+def load_user_from_existing_session():
+    try:
+        session = supabase.auth.get_session()
+        if session and getattr(session, "session", None):
+            current_session = session.session
+            if current_session and current_session.user:
+                st.session_state.user = current_session.user
+                st.session_state.access_token = current_session.access_token
+    except Exception:
+        pass
+
+def handle_login_success(auth_response):
+    if getattr(auth_response, "user", None):
+        st.session_state.user = auth_response.user
+    if getattr(auth_response, "session", None):
+        st.session_state.access_token = auth_response.session.access_token
+
+    upsert_profile(st.session_state.user)
+    ensure_default_project(st.session_state.user.id)
+    st.rerun()
+# ------------------------------
+# Database helpers
+# ------------------------------
+def upsert_profile(user):
+    if not user:
+        return
+    payload = {
+        "id": user.id,
+        "email": user.email,
     }
+    return supabase.table("profiles").upsert(payload).execute()
 
-    st.session_state.history.insert(0, record)
-    st.session_state.history = st.session_state.history[:10]
-    save_to_project(record)
+def ensure_default_project(user_id: str):
+    resp = (
+        supabase.table("projects")
+        .select("id,name")
+        .eq("user_id", user_id)
+        .eq("name", "General")
+        .limit(1)
+        .execute()
+    )
+    rows = resp.data or []
+    if not rows:
+        supabase.table("projects").insert({
+            "user_id": user_id,
+            "name": "General",
+            "created_at": now_iso(),
+            "updated_at": now_iso(),
+        }).execute()
 
-def save_to_project(record):
-    selected_project = st.session_state.selected_project
-    now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+def create_project(user_id: str, name: str):
+    return supabase.table("projects").insert({
+        "user_id": user_id,
+        "name": name.strip(),
+        "created_at": now_iso(),
+        "updated_at": now_iso(),
+    }).execute()
 
-    if selected_project not in st.session_state.projects:
-        st.session_state.projects[selected_project] = {
-            "created_at": now_str,
-            "updated_at": now_str,
-            "items": [],
-        }
+def get_projects(user_id: str):
+    return (
+        supabase.table("projects")
+        .select("*")
+        .eq("user_id", user_id)
+        .order("updated_at", desc=True)
+        .execute()
+    )
 
-    project = st.session_state.projects[selected_project]
+def rename_project(project_id: str, user_id: str, new_name: str):
+    return (
+        supabase.table("projects")
+        .update({
+            "name": new_name.strip(),
+            "updated_at": now_iso(),
+        })
+        .eq("id", project_id)
+        .eq("user_id", user_id)
+        .execute()
+    )
 
-    project_record = {
-        "type": record["type"],
-        "title": record["title"],
-        "text": record["text"],
-        "df": record["df"].copy() if record["df"] is not None else None,
-        "created_at": record["created_at"],
-        "screenshot_path": record.get("screenshot_path"),
-        "source_filename": record.get("source_filename"),
-    }
+def get_project_by_id(project_id: str, user_id: str):
+    resp = (
+        supabase.table("projects")
+        .select("*")
+        .eq("id", project_id)
+        .eq("user_id", user_id)
+        .limit(1)
+        .execute()
+    )
+    rows = resp.data or []
+    return rows[0] if rows else None
 
-    project["items"].insert(0, project_record)
-    project["updated_at"] = now_str
-    save_projects_to_file()
-
-def get_selected_project_items():
-    project = st.session_state.projects.get(st.session_state.selected_project, {})
-    return project.get("items", [])
-
-def load_project_item_into_current_output(item):
-    st.session_state.generated_type = item["type"]
-    st.session_state.generated_title = item["title"]
-    st.session_state.generated_text = item["text"]
-    st.session_state.generated_df = item["df"].copy() if item["df"] is not None else None
-    st.session_state.generated_base_name = safe_filename(item["title"])
-
-    if item["type"] == "Bug Report":
-        st.session_state.generated_sheet_name = "Bug_Report"
-    elif item["type"] == "Test Cases":
-        st.session_state.generated_sheet_name = "Test_Cases"
-    elif item["type"] == "Test Scenarios":
-        st.session_state.generated_sheet_name = "Test_Scenarios"
-    else:
-        st.session_state.generated_sheet_name = "AI_Output"
-
-def rename_project(old_name, new_name):
-    new_name = new_name.strip()
-
-    if not new_name:
-        return False, "Enter a new project name."
-
-    if old_name == "General":
-        return False, "You cannot rename the default General project."
-
-    if new_name == old_name:
-        return False, "New project name is the same as the current name."
-
-    if new_name in st.session_state.projects:
-        return False, "A project with that name already exists."
-
-    if old_name not in st.session_state.projects:
+def delete_project(project_id: str, user_id: str):
+    project = get_project_by_id(project_id, user_id)
+    if not project:
         return False, "Project not found."
 
-    st.session_state.projects[new_name] = st.session_state.projects.pop(old_name)
-    st.session_state.selected_project = new_name
-    move_project_asset_dir(old_name, new_name)
-    save_projects_to_file()
-    return True, f"Project renamed to '{new_name}'."
-
-def delete_project(project_name):
-    if project_name == "General":
+    if project["name"] == "General":
         return False, "You cannot delete the default General project."
 
-    if project_name in st.session_state.projects:
-        # delete asset files for all items
-        project_items = st.session_state.projects[project_name].get("items", [])
-        for item in project_items:
-            delete_file_if_exists(item.get("screenshot_path"))
+    items_resp = (
+        supabase.table("saved_items")
+        .select("id,screenshot_path")
+        .eq("project_id", project_id)
+        .eq("user_id", user_id)
+        .execute()
+    )
+    items = items_resp.data or []
 
-        del st.session_state.projects[project_name]
-        delete_project_asset_dir(project_name)
-        st.session_state.selected_project = "General"
-        save_projects_to_file()
-        return True, f"Project '{project_name}' deleted."
+    for item in items:
+        screenshot_path = item.get("screenshot_path")
+        if screenshot_path:
+            try:
+                supabase.storage.from_("screenshots").remove([screenshot_path])
+            except Exception:
+                pass
 
-    return False, "Project not found."
+    supabase.table("saved_items").delete().eq("project_id", project_id).eq("user_id", user_id).execute()
+    supabase.table("projects").delete().eq("id", project_id).eq("user_id", user_id).execute()
 
-def delete_project_item(project_name, idx):
-    project = st.session_state.projects.get(project_name)
-    if not project:
+    return True, f"Project '{project['name']}' deleted."
+
+def save_item(
+    user_id: str,
+    project_id: str,
+    item_type: str,
+    title: str,
+    input_context: str,
+    output_text: str,
+    screenshot_path: str = None,
+    source_filename: str = None,
+):
+    supabase.table("projects").update({
+        "updated_at": now_iso()
+    }).eq("id", project_id).eq("user_id", user_id).execute()
+
+    payload = {
+        "user_id": user_id,
+        "project_id": project_id,
+        "item_type": item_type,
+        "title": title.strip(),
+        "input_context": input_context.strip(),
+        "output_text": output_text.strip(),
+        "screenshot_path": screenshot_path,
+        "source_filename": source_filename,
+        "created_at": now_iso(),
+    }
+    return supabase.table("saved_items").insert(payload).execute()
+
+def get_project_items(user_id: str, project_id: str):
+    resp = (
+        supabase.table("saved_items")
+        .select("*")
+        .eq("user_id", user_id)
+        .eq("project_id", project_id)
+        .order("created_at", desc=True)
+        .execute()
+    )
+    return resp.data or []
+
+def get_recent_items(user_id: str, limit: int = 10):
+    resp = (
+        supabase.table("saved_items")
+        .select("*")
+        .eq("user_id", user_id)
+        .order("created_at", desc=True)
+        .limit(limit)
+        .execute()
+    )
+    return resp.data or []
+
+def delete_project_item(user_id: str, item_id: str):
+    item_resp = (
+        supabase.table("saved_items")
+        .select("id,screenshot_path")
+        .eq("id", item_id)
+        .eq("user_id", user_id)
+        .limit(1)
+        .execute()
+    )
+    rows = item_resp.data or []
+    if not rows:
         return
 
-    items = project.get("items", [])
-    if 0 <= idx < len(items):
-        delete_file_if_exists(items[idx].get("screenshot_path"))
-        del items[idx]
-        project["updated_at"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        save_projects_to_file()
+    screenshot_path = rows[0].get("screenshot_path")
+    if screenshot_path:
+        try:
+            supabase.storage.from_("screenshots").remove([screenshot_path])
+        except Exception:
+            pass
 
+    supabase.table("saved_items").delete().eq("id", item_id).eq("user_id", user_id).execute()
+
+def get_item_df(item):
+    item_type = item.get("item_type", "")
+    output_text = item.get("output_text", "")
+
+    try:
+        if item_type == "Bug Report":
+            data = {}
+            for line in output_text.splitlines():
+                if ":" in line:
+                    key, val = line.split(":", 1)
+                    data[key.strip()] = val.strip()
+            return pd.DataFrame([data]) if data else pd.DataFrame([{"Output": output_text}])
+
+        return pd.DataFrame([{"Output": output_text}])
+    except Exception:
+        return pd.DataFrame([{"Output": output_text}])
+
+# ------------------------------
+# Storage helpers
+# ------------------------------
+def upload_screenshot_to_storage(user_id: str, project_id: str, uploaded_file):
+    if uploaded_file is None:
+        return None
+
+    ext = os.path.splitext(uploaded_file.name)[1] or ".bin"
+    filename = f"{datetime.now().strftime('%Y%m%d_%H%M%S_%f')}{ext}"
+    storage_path = f"{user_id}/{project_id}/{filename}"
+
+    uploaded_file.seek(0)
+    file_bytes = uploaded_file.read()
+    uploaded_file.seek(0)
+
+    supabase.storage.from_("screenshots").upload(
+        path=storage_path,
+        file=file_bytes,
+        file_options={"content-type": uploaded_file.type}
+    )
+    return storage_path
+
+def get_signed_screenshot_url(storage_path: str, expires_in: int = 3600):
+    if not storage_path:
+        return None
+    try:
+        res = supabase.storage.from_("screenshots").create_signed_url(storage_path, expires_in)
+        if isinstance(res, dict):
+            return res.get("signedURL") or res.get("signedUrl")
+        return getattr(res, "get", lambda *_: None)("signedURL")
+    except Exception:
+        return None
+
+# ------------------------------
+# Jira helpers
+# ------------------------------
 def get_default_jira_issue_type(output_type):
     mapping = {
         "Bug Report": "Bug",
@@ -519,12 +546,7 @@ def build_jira_description_doc(description_text):
     for line in lines:
         content_blocks.append({
             "type": "paragraph",
-            "content": [
-                {
-                    "type": "text",
-                    "text": line[:3000]
-                }
-            ]
+            "content": [{"type": "text", "text": line[:3000]}]
         })
 
     if not content_blocks:
@@ -540,21 +562,19 @@ def build_jira_description_doc(description_text):
     }
 
 def create_jira_issue(summary, description, issue_type="Task", labels=None):
-    if not all([jira_base_url, jira_email, jira_api_token, jira_project_key]):
+    if not all([JIRA_BASE_URL, JIRA_EMAIL, JIRA_API_TOKEN, JIRA_PROJECT_KEY]):
         return False, "Jira settings are missing in Streamlit secrets or .env."
 
-    url = f"{jira_base_url}/rest/api/3/issue"
-
+    url = f"{JIRA_BASE_URL}/rest/api/3/issue"
     headers = {
         "Accept": "application/json",
         "Content-Type": "application/json"
     }
-
-    auth = (jira_email, jira_api_token)
+    auth = (JIRA_EMAIL, JIRA_API_TOKEN)
 
     payload = {
         "fields": {
-            "project": {"key": jira_project_key},
+            "project": {"key": JIRA_PROJECT_KEY},
             "summary": summary,
             "description": build_jira_description_doc(description),
             "issuetype": {"name": issue_type},
@@ -601,12 +621,6 @@ Use this exact JSON structure:
     "Assumptions": ""
   }}
 }}
-
-Rules:
-- Be practical, realistic, and ready to copy into Jira or Azure DevOps.
-- If a screenshot is provided, analyze the visible UI issue and use it to improve the bug report.
-- Do not invent certainty where the screenshot alone cannot prove something.
-- Clearly mark assumptions.
 """
 
     if uploaded_file is not None:
@@ -664,12 +678,6 @@ Use this exact JSON structure:
     }}
   ]
 }}
-
-Rules:
-- Include a mix of Functional, Negative, Edge, and Regression test cases.
-- Keep test cases practical, concise, and useful for QA execution.
-- Steps should be in a single text field with numbered steps.
-- Return at least 8 test cases when possible.
 """
 
     response = client.chat.completions.create(
@@ -726,12 +734,6 @@ Use this exact JSON structure:
     }}
   ]
 }}
-
-Rules:
-- Include Functional, Negative, Edge / Boundary, and Regression scenarios.
-- Keep scenarios high-level, practical, and suitable for leadership, product owners, and business stakeholders.
-- Do not generate low-level step-by-step test cases.
-- Return at least 8 scenarios when possible.
 """
 
     response = client.chat.completions.create(
@@ -798,14 +800,6 @@ Use this exact JSON structure:
     ]
   }
 }
-
-Rules:
-- Explain the diagram in simple language for a general audience.
-- Clearly describe what happens from the beginning to the end of the process.
-- Keep the output short, clear, and business-friendly.
-- Focus only on the main flow.
-- Do not add too much technical detail.
-- If any part is unclear, say "Needs review" instead of guessing.
 """
 
     if uploaded_flow.type in ["image/png", "image/jpg", "image/jpeg"]:
@@ -878,7 +872,7 @@ Test Data Needed:
     return pretty_text, df
 
 # ------------------------------
-# Display helpers
+# Output / render helpers
 # ------------------------------
 def show_download_buttons(df, pretty_text, base_name, sheet_name):
     csv_data = convert_df_to_csv(df)
@@ -912,6 +906,35 @@ def show_download_buttons(df, pretty_text, base_name, sheet_name):
             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
             use_container_width=True
         )
+
+def set_current_output(output_type, title, result_text, df, base_name, sheet_name):
+    st.session_state.generated_type = output_type
+    st.session_state.generated_title = title
+    st.session_state.generated_text = result_text
+    st.session_state.generated_df = df
+    st.session_state.generated_base_name = base_name
+    st.session_state.generated_sheet_name = sheet_name
+
+def load_project_item_into_current_output(item):
+    output_type = item.get("item_type", "")
+    title = item.get("title", "")
+    text = item.get("output_text", "")
+
+    if output_type == "Bug Report":
+        sheet_name = "Bug_Report"
+    elif output_type == "Test Cases":
+        sheet_name = "Test_Cases"
+    elif output_type == "Test Scenarios":
+        sheet_name = "Test_Scenarios"
+    else:
+        sheet_name = "AI_Output"
+
+    st.session_state.generated_type = output_type
+    st.session_state.generated_title = title
+    st.session_state.generated_text = text
+    st.session_state.generated_df = get_item_df(item)
+    st.session_state.generated_base_name = safe_filename(title)
+    st.session_state.generated_sheet_name = sheet_name
 
 def render_current_output():
     if st.session_state.generated_type and st.session_state.generated_df is not None:
@@ -959,7 +982,7 @@ def render_current_output():
                 )
 
             if success:
-                issue_url = f"{jira_base_url}/browse/{message}" if jira_base_url else ""
+                issue_url = f"{JIRA_BASE_URL}/browse/{message}" if JIRA_BASE_URL else ""
                 st.success(f"Jira issue created successfully: {message}")
                 if issue_url:
                     st.markdown(f"[Open Jira Issue]({issue_url})")
@@ -985,43 +1008,45 @@ def render_flow_output():
             "Flow_Requirements"
         )
 
-def render_history():
-    if not st.session_state.history:
+def render_recent_history(user_id: str):
+    items = get_recent_items(user_id, limit=10)
+    if not items:
         return
 
     with st.expander("View Recent History"):
-        for idx, item in enumerate(st.session_state.history, start=1):
-            st.markdown(f"**{idx}. {item['type']} — {item['title']}**")
-            if item["df"] is not None:
-                st.dataframe(item["df"], use_container_width=True)
+        for idx, item in enumerate(items, start=1):
+            st.markdown(f"**{idx}. {item.get('item_type', '')} — {item.get('title', '')}**")
 
-            if item.get("screenshot_path") and os.path.exists(item["screenshot_path"]):
-                st.image(item["screenshot_path"], caption=f"Saved screenshot • {item.get('source_filename') or ''}", use_container_width=True)
+            df = get_item_df(item)
+            if df is not None:
+                st.dataframe(df, use_container_width=True)
+
+            screenshot_path = item.get("screenshot_path")
+            if screenshot_path:
+                signed_url = get_signed_screenshot_url(screenshot_path)
+                if signed_url:
+                    st.image(signed_url, caption=f"Saved screenshot • {item.get('source_filename') or ''}", use_container_width=True)
 
             st.text_area(
                 f"History Output {idx}",
-                value=item["text"],
+                value=item.get("output_text", ""),
                 height=180,
                 key=f"history_text_{idx}"
             )
             st.markdown("---")
 
-def item_matches_search(item, search_term: str):
-    if not search_term:
-        return True
-
-    search_term = search_term.lower().strip()
-    haystack = " ".join([
-        str(item.get("title", "")),
-        str(item.get("type", "")),
-        str(item.get("text", ""))[:2000],
-        str(item.get("source_filename", "")),
-    ]).lower()
-
-    return search_term in haystack
-
-def render_sidebar_projects():
+# ------------------------------
+# Sidebar
+# ------------------------------
+def render_sidebar_projects(user):
     st.sidebar.markdown("### Projects")
+    st.sidebar.caption(user.email)
+
+    if st.sidebar.button("Logout", use_container_width=True, key="sidebar_logout_btn"):
+        sign_out_user()
+        st.rerun()
+
+    st.sidebar.markdown("---")
 
     new_project = st.sidebar.text_input(
         "New project",
@@ -1033,65 +1058,84 @@ def render_sidebar_projects():
         project_name = new_project.strip()
         if not project_name:
             st.sidebar.warning("Enter a project name.")
-        elif project_name in st.session_state.projects:
-            st.sidebar.warning("Project already exists.")
         else:
-            now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-            st.session_state.projects[project_name] = {
-                "created_at": now_str,
-                "updated_at": now_str,
-                "items": [],
-            }
-            st.session_state.selected_project = project_name
-            save_projects_to_file()
-            st.rerun()
+            existing = get_projects(user.id).data or []
+            if any(p["name"].lower() == project_name.lower() for p in existing):
+                st.sidebar.warning("Project already exists.")
+            else:
+                create_project(user.id, project_name)
+                created = get_projects(user.id).data or []
+                match = next((p for p in created if p["name"] == project_name), None)
+                if match:
+                    st.session_state.selected_project_id = match["id"]
+                st.rerun()
 
-    project_names = list(st.session_state.projects.keys())
+    projects = get_projects(user.id).data or []
 
-    selected_project = st.sidebar.selectbox(
+    if not projects:
+        st.sidebar.info("No projects found.")
+        return [], None, []
+
+    if not st.session_state.selected_project_id:
+        st.session_state.selected_project_id = projects[0]["id"]
+
+    selected_project = next((p for p in projects if p["id"] == st.session_state.selected_project_id), None)
+    if not selected_project:
+        selected_project = projects[0]
+        st.session_state.selected_project_id = selected_project["id"]
+
+    project_names = [p["name"] for p in projects]
+    current_index = next((idx for idx, p in enumerate(projects) if p["id"] == selected_project["id"]), 0)
+
+    selected_name = st.sidebar.selectbox(
         "Select Project",
         project_names,
-        index=project_names.index(st.session_state.selected_project) if st.session_state.selected_project in project_names else 0,
+        index=current_index,
         key="sidebar_selected_project_box"
     )
-    st.session_state.selected_project = selected_project
+
+    selected_project = next((p for p in projects if p["name"] == selected_name), projects[0])
+    st.session_state.selected_project_id = selected_project["id"]
 
     rename_value = st.sidebar.text_input(
         "Rename selected project",
-        value="" if selected_project == "General" else selected_project,
+        value="" if selected_project["name"] == "General" else selected_project["name"],
         key="sidebar_rename_project_value"
     )
 
     rename_col, delete_col = st.sidebar.columns(2)
     with rename_col:
         if st.button("Rename", use_container_width=True, key="sidebar_rename_project_btn"):
-            success, msg = rename_project(selected_project, rename_value)
-            if success:
-                st.sidebar.success(msg)
-                st.rerun()
+            new_name = rename_value.strip()
+            if not new_name:
+                st.sidebar.warning("Enter a new project name.")
+            elif selected_project["name"] == "General":
+                st.sidebar.warning("You cannot rename the default General project.")
+            elif any(p["name"].lower() == new_name.lower() and p["id"] != selected_project["id"] for p in projects):
+                st.sidebar.warning("A project with that name already exists.")
             else:
-                st.sidebar.warning(msg)
+                rename_project(selected_project["id"], user.id, new_name)
+                st.sidebar.success(f"Project renamed to '{new_name}'.")
+                st.rerun()
 
     with delete_col:
         if st.button("Delete", use_container_width=True, key="sidebar_delete_project_btn"):
-            success, msg = delete_project(selected_project)
+            success, msg = delete_project(selected_project["id"], user.id)
             if success:
+                st.session_state.selected_project_id = None
                 st.sidebar.success(msg)
                 st.rerun()
             else:
                 st.sidebar.warning(msg)
 
-    project_data = st.session_state.projects.get(selected_project, {})
-    project_items = project_data.get("items", [])
-    created_at = project_data.get("created_at", "")
-    updated_at = project_data.get("updated_at", "")
+    project_items = get_project_items(user.id, selected_project["id"])
 
     st.sidebar.markdown(
         f"""
         <div class="sidebar-project-card">
-            <div class="sidebar-project-title">{selected_project}</div>
+            <div class="sidebar-project-title">{selected_project['name']}</div>
             <div class="small-muted">{len(project_items)} saved item(s)</div>
-            <div class="small-muted">Updated: {updated_at or '-'}</div>
+            <div class="small-muted">Updated: {selected_project.get('updated_at', '-') or '-'}</div>
         </div>
         """,
         unsafe_allow_html=True
@@ -1109,240 +1153,343 @@ def render_sidebar_projects():
 
     if not filtered_items:
         st.sidebar.caption("No saved items found.")
-        return
+        return projects, selected_project, project_items
 
-    for idx, item in enumerate(filtered_items[:20]):
-        # map filtered item back to original index
-        original_idx = project_items.index(item)
-
+    for item in filtered_items[:20]:
         st.sidebar.markdown(
             f"""
             <div class="sidebar-item-card">
-                <strong>{item['title']}</strong><br>
-                <span class="small-muted">{item['type']} • {item['created_at']}</span><br>
+                <strong>{item.get('title', '')}</strong><br>
+                <span class="small-muted">{item.get('item_type', '')} • {item.get('created_at', '')}</span><br>
                 <span class="small-muted">{item.get('source_filename') or ''}</span>
             </div>
             """,
             unsafe_allow_html=True
         )
 
-        if item.get("screenshot_path") and os.path.exists(item["screenshot_path"]):
-            st.sidebar.image(item["screenshot_path"], use_container_width=True)
+        screenshot_path = item.get("screenshot_path")
+        if screenshot_path:
+            signed_url = get_signed_screenshot_url(screenshot_path)
+            if signed_url:
+                st.sidebar.image(signed_url, use_container_width=True)
 
         open_col, delete_col = st.sidebar.columns(2)
         with open_col:
-            if st.button("Open", key=f"sidebar_open_item_{selected_project}_{original_idx}", use_container_width=True):
+            if st.button("Open", key=f"sidebar_open_item_{item['id']}", use_container_width=True):
                 load_project_item_into_current_output(item)
                 st.rerun()
         with delete_col:
-            if st.button("Delete", key=f"sidebar_delete_item_{selected_project}_{original_idx}", use_container_width=True):
-                delete_project_item(selected_project, original_idx)
+            if st.button("Delete", key=f"sidebar_delete_item_{item['id']}", use_container_width=True):
+                delete_project_item(user.id, item["id"])
+                st.rerun()
+
+    return projects, selected_project, project_items
+
+# ------------------------------
+# Auth screen
+# ------------------------------
+
+def render_auth_screen():
+    st.markdown('<div class="auth-wrap">', unsafe_allow_html=True)
+    st.markdown('<div class="auth-card">', unsafe_allow_html=True)
+    st.title("AI QA Assistant")
+    st.write("Generate bug reports, test cases, high-level test scenarios, and flow-based requirements using AI.")
+
+    if st.session_state.get("user"):
+        with st.expander("Set new password"):
+            with st.form("update_password_form"):
+                new_password = st.text_input("New password", type="password", key="new_password")
+                confirm_password = st.text_input("Confirm new password", type="password", key="confirm_new_password")
+                pw_submit = st.form_submit_button("Update Password", use_container_width=True)
+
+                if pw_submit:
+                    if not new_password.strip():
+                        st.error("Please enter a new password.")
+                    elif new_password != confirm_password:
+                        st.error("Passwords do not match.")
+                    else:
+                        try:
+                            update_logged_in_user_password(new_password.strip())
+                            st.success("Password updated successfully.")
+                        except Exception as e:
+                            st.error(f"Password update failed: {auth_error_text(e)}")
+
+    tab1, tab2, tab3 = st.tabs(["Login", "Sign Up", "Forgot Password"])
+
+    with tab1:
+        with st.form("login_form"):
+            email = st.text_input("Email", key="login_email")
+            password = st.text_input("Password", type="password", key="login_password")
+            submit = st.form_submit_button("Login", use_container_width=True)
+            st.caption("New here? Use Sign Up. Forgot your password? Use Forgot Password.")
+
+            if submit:
+                if not email.strip() or not password.strip():
+                    st.error("Please enter email and password.")
+                else:
+                    try:
+                        response = sign_in_user(email.strip(), password)
+                        handle_login_success(response)
+                    except Exception as e:
+                        st.error(f"Login failed: {auth_error_text(e)}")
+
+    with tab2:
+        with st.form("signup_form"):
+            email = st.text_input("Email", key="signup_email")
+            password = st.text_input("Password", type="password", key="signup_password")
+            submit = st.form_submit_button("Create Account", use_container_width=True)
+
+            if submit:
+                if not email.strip() or not password.strip():
+                    st.error("Please enter email and password.")
+                else:
+                    email = email.strip()
+                    password = password.strip()
+
+                    try:
+                        existing_login = sign_in_user(email, password)
+                        if getattr(existing_login, "session", None):
+                            st.warning("This account is already created. Please use Sign In.")
+                        else:
+                            st.info("This account already exists. Please sign in, confirm your email, or use Forgot Password.")
+                    except Exception as login_exc:
+                        login_text = str(login_exc).lower()
+
+                        if "invalid login credentials" not in login_text and "email not confirmed" not in login_text:
+                            st.error(f"Unable to validate account: {auth_error_text(login_exc)}")
+                        else:
+                            try:
+                                signup_response = sign_up_user(email, password)
+
+                                if getattr(signup_response, "session", None):
+                                    st.success("Account created successfully.")
+                                else:
+                                    st.success("Account created successfully. Please confirm your email, then sign in.")
+                            except Exception as signup_exc:
+                                st.error(f"Sign up failed: {auth_error_text(signup_exc)}")
+
+    with tab3:
+        with st.form("forgot_password_form"):
+            email = st.text_input("Email", key="forgot_email")
+            submit = st.form_submit_button("Send Reset Link", use_container_width=True)
+
+            if submit:
+                if not email.strip():
+                    st.error("Please enter your email.")
+                else:
+                    try:
+                        send_password_reset_email(email.strip())
+                        st.success("Password reset email sent. Please check your inbox.")
+                    except Exception as e:
+                        st.error(f"Could not send reset email: {auth_error_text(e)}")
+
+    st.markdown('</div>', unsafe_allow_html=True)
+    st.markdown('</div>', unsafe_allow_html=True)
+
+# ------------------------------
+# Main app UI
+# ------------------------------
+def render_main_app():
+    user = st.session_state.user
+    if not user:
+        render_auth_screen()
+        return
+
+    projects, selected_project, project_items = render_sidebar_projects(user)
+
+    st.title("AI QA Assistant")
+    st.write("Generate bug reports, test cases, high-level test scenarios, and flow-based requirements using AI.")
+
+    tab1, tab2 = st.tabs(["QA Generator", "Flow to Requirements"])
+
+    with tab1:
+        title = st.text_input(
+            "Title / Requirement / Feature *",
+            placeholder="Example: Login button not working on Safari mobile"
+        )
+
+        context = st.text_area(
+            "Context / Business Requirement Details *",
+            height=150,
+            placeholder="Paste bug details, requirement details, acceptance criteria, or observations here..."
+        )
+
+        uploaded_file = st.file_uploader(
+            "Upload Screenshot (Optional)",
+            type=["png", "jpg", "jpeg"],
+            key="qa_screenshot_upload"
+        )
+
+        if uploaded_file is not None:
+            st.image(uploaded_file, caption="Uploaded Screenshot", use_container_width=True)
+
+        is_form_valid = bool(title.strip()) and bool(context.strip())
+
+        if is_form_valid:
+            st.success("Looks good. You can now generate outputs.")
+        else:
+            st.info("Enter Title and Context to enable Bug Report, Test Cases, and Test Scenarios.")
+
+        col1, col2, col3 = st.columns(3)
+
+        with col1:
+            bug_btn = st.button("Generate Bug Report", disabled=not is_form_valid, use_container_width=True)
+
+        with col2:
+            case_btn = st.button("Generate Test Cases", disabled=not is_form_valid, use_container_width=True)
+
+        with col3:
+            scenario_btn = st.button("Generate Test Scenarios", disabled=not is_form_valid, use_container_width=True)
+
+        if bug_btn:
+            try:
+                screenshot_path = upload_screenshot_to_storage(user.id, selected_project["id"], uploaded_file) if uploaded_file else None
+
+                with st.spinner("Generating bug report..."):
+                    result_text, df_bug = generate_bug_report_with_optional_image(title, context, uploaded_file)
+
+                base_name = f"{safe_filename(title)}_bug_report"
+
+                set_current_output("Bug Report", title, result_text, df_bug, base_name, "Bug_Report")
+
+                save_item(
+                    user_id=user.id,
+                    project_id=selected_project["id"],
+                    item_type="Bug Report",
+                    title=title,
+                    input_context=context,
+                    output_text=result_text,
+                    screenshot_path=screenshot_path,
+                    source_filename=uploaded_file.name if uploaded_file else None,
+                )
+
+            except Exception as e:
+                st.error(f"Failed to generate bug report: {e}")
+
+        if case_btn:
+            try:
+                screenshot_path = upload_screenshot_to_storage(user.id, selected_project["id"], uploaded_file) if uploaded_file else None
+
+                with st.spinner("Generating test cases..."):
+                    result_text, df_cases = generate_test_cases(title, context)
+
+                base_name = f"{safe_filename(title)}_test_cases"
+
+                set_current_output("Test Cases", title, result_text, df_cases, base_name, "Test_Cases")
+
+                save_item(
+                    user_id=user.id,
+                    project_id=selected_project["id"],
+                    item_type="Test Cases",
+                    title=title,
+                    input_context=context,
+                    output_text=result_text,
+                    screenshot_path=screenshot_path,
+                    source_filename=uploaded_file.name if uploaded_file else None,
+                )
+
+            except Exception as e:
+                st.error(f"Failed to generate test cases: {e}")
+
+        if scenario_btn:
+            try:
+                screenshot_path = upload_screenshot_to_storage(user.id, selected_project["id"], uploaded_file) if uploaded_file else None
+
+                with st.spinner("Generating test scenarios..."):
+                    result_text, df_scenarios = generate_test_scenarios(title, context)
+
+                base_name = f"{safe_filename(title)}_test_scenarios"
+
+                set_current_output("Test Scenarios", title, result_text, df_scenarios, base_name, "Test_Scenarios")
+
+                save_item(
+                    user_id=user.id,
+                    project_id=selected_project["id"],
+                    item_type="Test Scenarios",
+                    title=title,
+                    input_context=context,
+                    output_text=result_text,
+                    screenshot_path=screenshot_path,
+                    source_filename=uploaded_file.name if uploaded_file else None,
+                )
+
+            except Exception as e:
+                st.error(f"Failed to generate test scenarios: {e}")
+
+        render_current_output()
+        render_recent_history(user.id)
+
+        if st.session_state.generated_type:
+            if st.button("Clear Current Output", use_container_width=True, key="clear_qa_output"):
+                st.session_state.generated_type = None
+                st.session_state.generated_title = ""
+                st.session_state.generated_text = ""
+                st.session_state.generated_df = None
+                st.session_state.generated_base_name = ""
+                st.session_state.generated_sheet_name = ""
+                st.rerun()
+
+    with tab2:
+        st.subheader("Flow Diagram to Requirements")
+        st.caption("Upload a flow diagram and generate a simple explanation for general audience.")
+
+        uploaded_flow = st.file_uploader(
+            "Upload Flow Diagram",
+            type=["png", "jpg", "jpeg", "pdf"],
+            key="flow_diagram_upload"
+        )
+
+        if uploaded_flow is not None:
+            reset_flow_output_if_new_file(uploaded_flow)
+
+            if uploaded_flow.type in ["image/png", "image/jpg", "image/jpeg"]:
+                st.image(uploaded_flow, caption="Uploaded Flow Diagram", use_container_width=True)
+            elif uploaded_flow.type == "application/pdf":
+                st.info(f"PDF uploaded: {uploaded_flow.name}")
+
+        flow_btn = st.button(
+            "Generate Requirements",
+            disabled=uploaded_flow is None,
+            use_container_width=True,
+            key="generate_flow_requirements"
+        )
+
+        if uploaded_flow is None:
+            st.info("Upload a flow diagram to enable Generate Requirements.")
+
+        if flow_btn and uploaded_flow is not None:
+            try:
+                flow_title = uploaded_flow.name.rsplit(".", 1)[0]
+
+                with st.spinner("Generating requirements from flow..."):
+                    result_text, df_flow = generate_requirements_from_flow(uploaded_flow)
+
+                st.session_state.flow_generated_title = flow_title
+                st.session_state.flow_generated_text = result_text
+                st.session_state.flow_generated_df = df_flow
+                st.session_state.flow_generated_base_name = f"{safe_filename(flow_title)}_requirements"
+
+            except Exception as e:
+                st.error(f"Failed to generate requirements from flow: {e}")
+
+        render_flow_output()
+
+        if st.session_state.flow_generated_df is not None:
+            if st.button("Clear Flow Output", use_container_width=True, key="clear_flow_output"):
+                st.session_state.flow_generated_text = ""
+                st.session_state.flow_generated_title = ""
+                st.session_state.flow_generated_df = None
+                st.session_state.flow_generated_base_name = ""
                 st.rerun()
 
 # ------------------------------
-# Sidebar
+# Boot existing auth session once
 # ------------------------------
-render_sidebar_projects()
-
-# ------------------------------
-# Header
-# ------------------------------
-st.title("AI QA Assistant")
-st.write("Generate bug reports, test cases, high-level test scenarios, and flow-based requirements using AI.")
-
-tab1, tab2 = st.tabs(["QA Generator", "Flow to Requirements"])
+if not st.session_state.auth_checked:
+    load_user_from_existing_session()
+    st.session_state.auth_checked = True
 
 # ------------------------------
-# Tab 1: QA Generator
+# Run app
 # ------------------------------
-with tab1:
-    title = st.text_input(
-        "Title / Requirement / Feature *",
-        placeholder="Example: Login button not working on Safari mobile"
-    )
-
-    context = st.text_area(
-        "Context / Business Requirement Details *",
-        height=150,
-        placeholder="Paste bug details, requirement details, acceptance criteria, or observations here..."
-    )
-
-    uploaded_file = st.file_uploader(
-        "Upload Screenshot (Optional)",
-        type=["png", "jpg", "jpeg"],
-        key="qa_screenshot_upload"
-    )
-
-    if uploaded_file is not None:
-        st.image(uploaded_file, caption="Uploaded Screenshot", use_container_width=True)
-
-    is_form_valid = bool(title.strip()) and bool(context.strip())
-
-    if is_form_valid:
-        st.success("Looks good. You can now generate outputs.")
-    else:
-        st.info("Enter Title and Context to enable Bug Report, Test Cases, and Test Scenarios.")
-
-    col1, col2, col3 = st.columns(3)
-
-    with col1:
-        bug_btn = st.button("Generate Bug Report", disabled=not is_form_valid, use_container_width=True)
-
-    with col2:
-        case_btn = st.button("Generate Test Cases", disabled=not is_form_valid, use_container_width=True)
-
-    with col3:
-        scenario_btn = st.button("Generate Test Scenarios", disabled=not is_form_valid, use_container_width=True)
-
-    if bug_btn:
-        try:
-            screenshot_path = save_uploaded_file_to_project(st.session_state.selected_project, uploaded_file) if uploaded_file else None
-
-            with st.spinner("Generating bug report..."):
-                result_text, df_bug = generate_bug_report_with_optional_image(title, context, uploaded_file)
-
-            base_name = f"{safe_filename(title)}_bug_report"
-
-            st.session_state.generated_type = "Bug Report"
-            st.session_state.generated_title = title
-            st.session_state.generated_text = result_text
-            st.session_state.generated_df = df_bug
-            st.session_state.generated_base_name = base_name
-            st.session_state.generated_sheet_name = "Bug_Report"
-
-            add_to_history(
-                "Bug Report",
-                title,
-                result_text,
-                df_bug,
-                screenshot_path=screenshot_path,
-                source_filename=uploaded_file.name if uploaded_file else None,
-            )
-
-        except Exception as e:
-            st.error(f"Failed to generate bug report: {e}")
-
-    if case_btn:
-        try:
-            screenshot_path = save_uploaded_file_to_project(st.session_state.selected_project, uploaded_file) if uploaded_file else None
-
-            with st.spinner("Generating test cases..."):
-                result_text, df_cases = generate_test_cases(title, context)
-
-            base_name = f"{safe_filename(title)}_test_cases"
-
-            st.session_state.generated_type = "Test Cases"
-            st.session_state.generated_title = title
-            st.session_state.generated_text = result_text
-            st.session_state.generated_df = df_cases
-            st.session_state.generated_base_name = base_name
-            st.session_state.generated_sheet_name = "Test_Cases"
-
-            add_to_history(
-                "Test Cases",
-                title,
-                result_text,
-                df_cases,
-                screenshot_path=screenshot_path,
-                source_filename=uploaded_file.name if uploaded_file else None,
-            )
-
-        except Exception as e:
-            st.error(f"Failed to generate test cases: {e}")
-
-    if scenario_btn:
-        try:
-            screenshot_path = save_uploaded_file_to_project(st.session_state.selected_project, uploaded_file) if uploaded_file else None
-
-            with st.spinner("Generating test scenarios..."):
-                result_text, df_scenarios = generate_test_scenarios(title, context)
-
-            base_name = f"{safe_filename(title)}_test_scenarios"
-
-            st.session_state.generated_type = "Test Scenarios"
-            st.session_state.generated_title = title
-            st.session_state.generated_text = result_text
-            st.session_state.generated_df = df_scenarios
-            st.session_state.generated_base_name = base_name
-            st.session_state.generated_sheet_name = "Test_Scenarios"
-
-            add_to_history(
-                "Test Scenarios",
-                title,
-                result_text,
-                df_scenarios,
-                screenshot_path=screenshot_path,
-                source_filename=uploaded_file.name if uploaded_file else None,
-            )
-
-        except Exception as e:
-            st.error(f"Failed to generate test scenarios: {e}")
-
-    render_current_output()
-    render_history()
-
-    if st.session_state.generated_type:
-        if st.button("Clear Current Output", use_container_width=True, key="clear_qa_output"):
-            st.session_state.generated_type = None
-            st.session_state.generated_title = ""
-            st.session_state.generated_text = ""
-            st.session_state.generated_df = None
-            st.session_state.generated_base_name = ""
-            st.session_state.generated_sheet_name = ""
-            st.rerun()
-
-# ------------------------------
-# Tab 2: Flow to Requirements
-# ------------------------------
-with tab2:
-    st.subheader("Flow Diagram to Requirements")
-    st.caption("Upload a flow diagram and generate a simple explanation for general audience.")
-
-    uploaded_flow = st.file_uploader(
-        "Upload Flow Diagram",
-        type=["png", "jpg", "jpeg", "pdf"],
-        key="flow_diagram_upload"
-    )
-
-    if uploaded_flow is not None:
-        reset_flow_output_if_new_file(uploaded_flow)
-
-        if uploaded_flow.type in ["image/png", "image/jpg", "image/jpeg"]:
-            st.image(uploaded_flow, caption="Uploaded Flow Diagram", use_container_width=True)
-        elif uploaded_flow.type == "application/pdf":
-            st.info(f"PDF uploaded: {uploaded_flow.name}")
-
-    flow_btn = st.button(
-        "Generate Requirements",
-        disabled=uploaded_flow is None,
-        use_container_width=True,
-        key="generate_flow_requirements"
-    )
-
-    if uploaded_flow is None:
-        st.info("Upload a flow diagram to enable Generate Requirements.")
-
-    if flow_btn and uploaded_flow is not None:
-        try:
-            flow_title = uploaded_flow.name.rsplit(".", 1)[0]
-
-            with st.spinner("Generating requirements from flow..."):
-                result_text, df_flow = generate_requirements_from_flow(uploaded_flow)
-
-            st.session_state.flow_generated_title = flow_title
-            st.session_state.flow_generated_text = result_text
-            st.session_state.flow_generated_df = df_flow
-            st.session_state.flow_generated_base_name = f"{safe_filename(flow_title)}_requirements"
-
-        except Exception as e:
-            st.error(f"Failed to generate requirements: {e}")
-
-    render_flow_output()
-
-    if st.session_state.flow_generated_df is not None:
-        if st.button("Clear Flow Output", use_container_width=True, key="clear_flow_output"):
-            st.session_state.flow_generated_text = ""
-            st.session_state.flow_generated_title = ""
-            st.session_state.flow_generated_df = None
-            st.session_state.flow_generated_base_name = ""
-            st.rerun()
+render_main_app()
