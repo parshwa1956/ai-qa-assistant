@@ -41,11 +41,6 @@ OPENAI_API_KEY = get_secret_or_env("OPENAI_API_KEY")
 SUPABASE_URL = get_secret_or_env("SUPABASE_URL")
 SUPABASE_KEY = get_secret_or_env("SUPABASE_KEY")
 
-JIRA_BASE_URL = get_secret_or_env("JIRA_BASE_URL")
-JIRA_EMAIL = get_secret_or_env("JIRA_EMAIL")
-JIRA_API_TOKEN = get_secret_or_env("JIRA_API_TOKEN")
-JIRA_PROJECT_KEY = get_secret_or_env("JIRA_PROJECT_KEY")
-
 if not OPENAI_API_KEY:
     st.error("OPENAI_API_KEY not found in Streamlit secrets or .env.")
     st.stop()
@@ -112,20 +107,6 @@ st.markdown(
     padding: 10px 12px;
     background: #fafafa;
     margin-bottom: 10px;
-}
-
-.auth-wrap {
-    max-width: 560px;
-    margin: 0 auto;
-    padding-top: 40px;
-}
-
-.auth-card {
-    border: 1px solid #e5e7eb;
-    border-radius: 16px;
-    padding: 24px;
-    background: #ffffff;
-    box-shadow: 0 1px 10px rgba(0,0,0,0.03);
 }
 </style>
 """,
@@ -507,6 +488,57 @@ def delete_project_item(user_id: str, item_id: str):
     supabase.table("saved_items").delete().eq("id", item_id).eq("user_id", user_id).execute()
 
 
+def get_jira_integration(user_id: str):
+    resp = (
+        supabase.table("jira_integrations")
+        .select("*")
+        .eq("user_id", user_id)
+        .limit(1)
+        .execute()
+    )
+    rows = resp.data or []
+    return rows[0] if rows else None
+
+
+def save_jira_integration(
+    user_id: str,
+    jira_base_url: str,
+    jira_email: str,
+    jira_api_token: str,
+    jira_project_key: str,
+):
+    payload = {
+        "user_id": user_id,
+        "jira_base_url": jira_base_url.strip().rstrip("/"),
+        "jira_email": jira_email.strip(),
+        "jira_api_token": jira_api_token.strip(),
+        "jira_project_key": jira_project_key.strip().upper(),
+        "updated_at": now_iso(),
+    }
+
+    existing = get_jira_integration(user_id)
+
+    if existing:
+        return (
+            supabase.table("jira_integrations")
+            .update(payload)
+            .eq("user_id", user_id)
+            .execute()
+        )
+
+    payload["created_at"] = now_iso()
+    return supabase.table("jira_integrations").insert(payload).execute()
+
+
+def delete_jira_integration(user_id: str):
+    return (
+        supabase.table("jira_integrations")
+        .delete()
+        .eq("user_id", user_id)
+        .execute()
+    )
+
+
 def get_item_df(item):
     item_type = item.get("item_type", "")
     output_text = item.get("output_text", "")
@@ -606,17 +638,26 @@ def build_jira_description_doc(description_text):
     }
 
 
-def create_jira_issue(summary, description, issue_type="Task", labels=None):
-    if not all([JIRA_BASE_URL, JIRA_EMAIL, JIRA_API_TOKEN, JIRA_PROJECT_KEY]):
-        return False, "Jira settings are missing in Streamlit secrets or .env."
+def create_jira_issue(
+    jira_base_url,
+    jira_email,
+    jira_api_token,
+    jira_project_key,
+    summary,
+    description,
+    issue_type="Task",
+    labels=None,
+):
+    if not all([jira_base_url, jira_email, jira_api_token, jira_project_key]):
+        return False, "Jira settings are missing. Please connect your Jira account first."
 
-    url = f"{JIRA_BASE_URL}/rest/api/3/issue"
+    url = f"{jira_base_url.rstrip('/')}/rest/api/3/issue"
     headers = {"Accept": "application/json", "Content-Type": "application/json"}
-    auth = (JIRA_EMAIL, JIRA_API_TOKEN)
+    auth = (jira_email, jira_api_token)
 
     payload = {
         "fields": {
-            "project": {"key": JIRA_PROJECT_KEY},
+            "project": {"key": jira_project_key},
             "summary": summary,
             "description": build_jira_description_doc(description),
             "issuetype": {"name": issue_type},
@@ -624,11 +665,35 @@ def create_jira_issue(summary, description, issue_type="Task", labels=None):
         }
     }
 
-    response = requests.post(url, json=payload, headers=headers, auth=auth, timeout=60)
+    try:
+        response = requests.post(url, json=payload, headers=headers, auth=auth, timeout=60)
+    except Exception as e:
+        return False, f"Connection failed: {e}"
 
     if response.status_code in [200, 201]:
         data = response.json()
         return True, data.get("key", "Created")
+
+    return False, response.text
+
+
+def test_jira_connection(jira_base_url, jira_email, jira_api_token):
+    if not all([jira_base_url, jira_email, jira_api_token]):
+        return False, "Please fill in Jira Base URL, Jira Email, and Jira API Token."
+
+    url = f"{jira_base_url.rstrip('/')}/rest/api/3/myself"
+    headers = {"Accept": "application/json"}
+    auth = (jira_email, jira_api_token)
+
+    try:
+        response = requests.get(url, headers=headers, auth=auth, timeout=30)
+    except Exception as e:
+        return False, f"Connection failed: {e}"
+
+    if response.status_code == 200:
+        data = response.json()
+        display_name = data.get("displayName", "Connected user")
+        return True, f"Connected successfully as {display_name}"
 
     return False, response.text
 
@@ -1018,6 +1083,13 @@ def render_current_output():
 
         st.markdown("### Jira")
 
+        current_user = st.session_state.get("user")
+        jira_config = get_jira_integration(current_user.id) if current_user else None
+
+        default_base_url = jira_config["jira_base_url"] if jira_config else ""
+        default_email = jira_config["jira_email"] if jira_config else ""
+        default_project_key = jira_config["jira_project_key"] if jira_config else ""
+
         default_issue_type = get_default_jira_issue_type(output_type)
         default_labels = get_default_jira_labels(output_type)
 
@@ -1031,22 +1103,113 @@ def render_current_output():
             key=f"jira_issue_type_{output_type}",
         )
 
-        if st.button("Create in Jira", use_container_width=True, key=f"create_jira_{output_type}"):
-            with st.spinner("Creating Jira issue..."):
-                success, message = create_jira_issue(
-                    summary=generated_title,
-                    description=result_text,
-                    issue_type=jira_issue_type,
-                    labels=default_labels,
-                )
+        with st.expander("Jira Settings", expanded=False):
+            jira_base_url = st.text_input(
+                "Jira Base URL",
+                value=default_base_url,
+                placeholder="https://your-company.atlassian.net",
+                key=f"jira_base_url_{output_type}",
+            )
+            jira_email = st.text_input(
+                "Jira Email",
+                value=default_email,
+                placeholder="you@company.com",
+                key=f"jira_email_{output_type}",
+            )
+            jira_api_token = st.text_input(
+                "Jira API Token",
+                type="password",
+                placeholder="Paste your Jira API token",
+                key=f"jira_api_token_{output_type}",
+            )
+            jira_project_key = st.text_input(
+                "Default Jira Project Key",
+                value=default_project_key,
+                placeholder="QA",
+                key=f"jira_project_key_{output_type}",
+            )
 
-            if success:
-                issue_url = f"{JIRA_BASE_URL}/browse/{message}" if JIRA_BASE_URL else ""
-                st.success(f"Jira issue created successfully: {message}")
-                if issue_url:
-                    st.markdown(f"[Open Jira Issue]({issue_url})")
+            col_a, col_b, col_c = st.columns(3)
+
+            with col_a:
+                if st.button("Test Connection", key=f"jira_test_{output_type}", use_container_width=True):
+                    token_to_use = jira_api_token.strip() if jira_api_token.strip() else (
+                        jira_config["jira_api_token"] if jira_config else ""
+                    )
+
+                    ok, msg = test_jira_connection(
+                        jira_base_url.strip(),
+                        jira_email.strip(),
+                        token_to_use,
+                    )
+                    if ok:
+                        st.success(msg)
+                    else:
+                        st.error(f"Test failed: {msg}")
+
+            with col_b:
+                if st.button("Save Settings", key=f"jira_save_{output_type}", use_container_width=True):
+                    token_to_save = jira_api_token.strip() if jira_api_token.strip() else (
+                        jira_config["jira_api_token"] if jira_config else ""
+                    )
+
+                    if not jira_base_url.strip() or not jira_email.strip() or not token_to_save or not jira_project_key.strip():
+                        st.error("Please complete all Jira fields before saving.")
+                    else:
+                        try:
+                            save_jira_integration(
+                                user_id=current_user.id,
+                                jira_base_url=jira_base_url,
+                                jira_email=jira_email,
+                                jira_api_token=token_to_save,
+                                jira_project_key=jira_project_key,
+                            )
+                            st.success("Jira settings saved successfully.")
+                            st.rerun()
+                        except Exception as e:
+                            st.error(f"Failed to save Jira settings: {e}")
+
+            with col_c:
+                if st.button("Remove Jira", key=f"jira_remove_{output_type}", use_container_width=True):
+                    try:
+                        delete_jira_integration(current_user.id)
+                        st.success("Jira settings removed.")
+                        st.rerun()
+                    except Exception as e:
+                        st.error(f"Failed to remove Jira settings: {e}")
+
+        jira_config = get_jira_integration(current_user.id) if current_user else None
+
+        if jira_config:
+            st.success(
+                f"Connected to Jira: {jira_config.get('jira_base_url')} / "
+                f"{jira_config.get('jira_project_key')}"
+            )
+        else:
+            st.warning("Jira is not connected. Expand Jira Settings below, test connection, and save.")
+
+        if st.button("Create in Jira", use_container_width=True, key=f"create_jira_{output_type}"):
+            if not jira_config:
+                st.error("Please save your Jira settings first.")
             else:
-                st.error(f"Failed to create Jira issue: {message}")
+                with st.spinner("Creating Jira issue..."):
+                    success, message = create_jira_issue(
+                        jira_base_url=jira_config["jira_base_url"],
+                        jira_email=jira_config["jira_email"],
+                        jira_api_token=jira_config["jira_api_token"],
+                        jira_project_key=jira_config["jira_project_key"],
+                        summary=generated_title,
+                        description=result_text,
+                        issue_type=jira_issue_type,
+                        labels=default_labels,
+                    )
+
+                if success:
+                    issue_url = f"{jira_config['jira_base_url'].rstrip('/')}/browse/{message}"
+                    st.success(f"Jira issue created successfully: {message}")
+                    st.markdown(f"[Open Jira Issue]({issue_url})")
+                else:
+                    st.error(f"Failed to create Jira issue: {message}")
 
 
 def render_flow_output():
@@ -1345,6 +1508,7 @@ def render_auth_screen():
                         st.success("Password reset email sent. Please check your inbox.")
                     except Exception as e:
                         st.error(f"Could not send reset email: {auth_error_text(e)}")
+
 # ------------------------------
 # Main app UI
 # ------------------------------
