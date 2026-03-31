@@ -106,20 +106,20 @@ st.markdown("## Get Started")
 a1, a2, a3 = st.columns(3)
 
 with a1:
-    st.page_link("pages/1_Login_and_Start.py", label="Login and Start", icon="🧪")
+    st.page_link("1_Login_and_Start.py", label="Login and Start", icon="🧪")
 
 with a2:
-    st.page_link("pages/4_Pricing.py", label="View Pricing", icon="💳")
+    st.page_link("4_Pricing.py", label="View Pricing", icon="💳")
 
 with a3:
-    st.page_link("pages/5_Contact_Support.py", label="Contact Support", icon="📩")
+    st.page_link("5_Contact_Support.py", label="Contact Support", icon="📩")
 
 st.markdown("---")
 
 l1, l2 = st.columns(2)
 
 with l1:
-    st.page_link("pages/6_Privacy_Policy.py", label="Privacy Policy", icon="🔒")
+    st.page_link("6_Privacy_Policy.py", label="Privacy Policy", icon="🔒")
 
 with l2:
-    st.page_link("pages/7_Terms_of_Service.py", label="Terms of Service", icon="📄")
+   st.page_link("7_Terms_of_Service.py", label="Terms of Service", icon="📄")
