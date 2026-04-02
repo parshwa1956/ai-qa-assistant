@@ -1,175 +1,209 @@
-import streamlit as st
+import json
+import os
+
+from openai import OpenAI
 
 
-def get_severity_color(severity):
-    severity = str(severity).strip().lower()
-    if severity == "high":
-        return "#ff4b4b"
-    elif severity == "medium":
-        return "#f39c12"
-    elif severity == "low":
-        return "#2ecc71"
-    return "#6c757d"
+def _extract_json(content: str) -> dict:
+    content = (content or "").strip()
+
+    if content.startswith("```"):
+        content = content.replace("```json", "").replace("```", "").strip()
+
+    return json.loads(content)
 
 
-def render_code_review_results(review_result):
-    if not review_result:
-        st.warning("No review results available.")
-        return
+def _build_mock_review(code_input: str) -> dict:
+    if not code_input or not code_input.strip():
+        return {
+            "success": True,
+            "summary": {
+                "total_issues": 0,
+                "high": 0,
+                "medium": 0,
+                "low": 0,
+                "overall_health": "Unknown",
+                "text": "No code was provided for review."
+            },
+            "issues": [],
+            "recommendations": []
+        }
 
-    summary = review_result.get("summary", {})
-    issues = review_result.get("issues", [])
+    return {
+        "success": True,
+        "summary": {
+            "total_issues": 3,
+            "high": 1,
+            "medium": 1,
+            "low": 1,
+            "overall_health": "Moderate",
+            "text": "The code has a few important reliability and maintainability issues that should be fixed before production use."
+        },
+        "issues": [
+            {
+                "title": "Possible null handling issue",
+                "file": "uploaded_code.py",
+                "function": "login_user",
+                "line": 12,
+                "severity": "High",
+                "category": "Reliability",
+                "current_code": "token = response['data']['token']",
+                "explanation": "This line assumes response, data, and token always exist.",
+                "future_risk": "This may fail later if the API response changes or returns partial data.",
+                "recommendation": "Add defensive checks before accessing nested values.",
+                "suggested_code": "data = response.get('data', {}) if response else {}\ntoken = data.get('token')\nif not token:\n    raise ValueError('Token not found')",
+                "impact": "Login flow may break with runtime error.",
+                "language": "python"
+            },
+            {
+                "title": "Broad exception handling",
+                "file": "uploaded_code.py",
+                "function": "process_payment",
+                "line": 28,
+                "severity": "Medium",
+                "category": "Maintainability",
+                "current_code": "except:\n    return 'failed'",
+                "explanation": "Bare except catches all exceptions and hides the real root cause.",
+                "future_risk": "Troubleshooting production issues will become difficult.",
+                "recommendation": "Catch specific exceptions and log the real error.",
+                "suggested_code": "except PaymentError as e:\n    logger.error(f'Payment failed: {e}')\n    return 'failed'",
+                "impact": "Errors may be silently hidden.",
+                "language": "python"
+            },
+            {
+                "title": "Hardcoded configuration value",
+                "file": "uploaded_code.py",
+                "function": "module level",
+                "line": 3,
+                "severity": "Low",
+                "category": "Configuration",
+                "current_code": "api_url = 'https://prod.company.com/api/login'",
+                "explanation": "The API URL is hardcoded in source code.",
+                "future_risk": "Moving between dev, test, and prod environments will be harder later.",
+                "recommendation": "Move config values into environment variables or a config file.",
+                "suggested_code": "import os\napi_url = os.getenv('API_URL', '')",
+                "impact": "Environment changes will require code changes.",
+                "language": "python"
+            }
+        ],
+        "recommendations": [
+            "Add defensive null checking for nested API responses.",
+            "Replace bare except blocks with specific exception handling.",
+            "Move environment-specific settings into configuration."
+        ]
+    }
 
-    st.markdown("## Smart Code Review Results")
 
-    col1, col2, col3, col4, col5 = st.columns(5)
-    col1.metric("Total Issues", summary.get("total_issues", 0))
-    col2.metric("High", summary.get("high", 0))
-    col3.metric("Medium", summary.get("medium", 0))
-    col4.metric("Low", summary.get("low", 0))
-    col5.metric("Code Health", summary.get("overall_health", "Unknown"))
+def _run_ai_code_review(code_input: str) -> dict:
+    api_key = os.getenv("OPENAI_API_KEY")
 
-    st.markdown("---")
+    if not api_key:
+        raise ValueError("OPENAI_API_KEY is missing.")
 
-    if not issues:
-        st.success("No issues found. Code looks clean.")
-        return
+    client = OpenAI(api_key=api_key)
 
-    severity_filter = st.selectbox(
-        "Filter issues by severity",
-        ["All", "High", "Medium", "Low"],
-        index=0,
-        key="code_review_severity_filter"
+    prompt = f"""
+You are a senior software engineer performing a smart code review.
+
+Review the code below and return ONLY valid JSON.
+
+Use this exact structure:
+{{
+  "success": true,
+  "summary": {{
+    "total_issues": 0,
+    "high": 0,
+    "medium": 0,
+    "low": 0,
+    "overall_health": "Good",
+    "text": "Short overall review summary"
+  }},
+  "issues": [
+    {{
+      "title": "Issue title",
+      "file": "uploaded_code.py",
+      "function": "function name or module level",
+      "line": 1,
+      "severity": "High",
+      "category": "Reliability",
+      "current_code": "code snippet",
+      "explanation": "Why this matters",
+      "future_risk": "What may happen later",
+      "recommendation": "Recommended fix",
+      "suggested_code": "Improved code example",
+      "impact": "Impact if not fixed",
+      "language": "python"
+    }}
+  ],
+  "recommendations": [
+    "Recommendation 1",
+    "Recommendation 2"
+  ]
+}}
+
+Code to review:
+{code_input}
+"""
+
+    response = client.chat.completions.create(
+        model="gpt-4o-mini",
+        messages=[{"role": "user", "content": prompt}],
+        temperature=0.2,
     )
 
-    if severity_filter != "All":
-        issues = [
-            i for i in issues
-            if str(i.get("severity", "")).lower() == severity_filter.lower()
-        ]
+    content = response.choices[0].message.content
+    parsed = _extract_json(content)
 
-    if not issues:
-        st.info("No issues match the selected severity filter.")
-        return
+    if "success" not in parsed:
+        parsed["success"] = True
 
-    for idx, issue in enumerate(issues, start=1):
-        title = issue.get("title", "Untitled Issue")
-        file_name = issue.get("file", "Unknown file")
-        function_name = issue.get("function", "Unknown function")
-        line_no = issue.get("line", "N/A")
-        severity = issue.get("severity", "Unknown")
-        category = issue.get("category", "General")
-        current_code = issue.get("current_code", "")
-        explanation = issue.get("explanation", "No explanation provided.")
-        future_risk = issue.get("future_risk", "No future risk provided.")
-        recommendation = issue.get("recommendation", "No recommendation provided.")
-        suggested_code = issue.get("suggested_code", "")
-        impact = issue.get("impact", "No impact provided.")
+    if "summary" not in parsed or not isinstance(parsed["summary"], dict):
+        parsed["summary"] = {
+            "total_issues": len(parsed.get("issues", [])),
+            "high": 0,
+            "medium": 0,
+            "low": 0,
+            "overall_health": "Unknown",
+            "text": "AI review completed."
+        }
 
-        severity_color = get_severity_color(severity)
+    if "issues" not in parsed or not isinstance(parsed["issues"], list):
+        parsed["issues"] = []
 
-        st.markdown(
-            f"""
-            <div style="
-                border: 1px solid #e6e6e6;
-                border-radius: 12px;
-                padding: 16px;
-                margin-bottom: 16px;
-                background-color: #ffffff;
-                box-shadow: 0 2px 8px rgba(0,0,0,0.04);
-            ">
-                <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap;">
-                    <div>
-                        <h4 style="margin:0;">Issue {idx}: {title}</h4>
-                        <p style="margin:6px 0 0 0; color:#555;">
-                            <strong>File:</strong> {file_name} &nbsp;&nbsp;
-                            <strong>Function:</strong> {function_name} &nbsp;&nbsp;
-                            <strong>Line:</strong> {line_no}
-                        </p>
-                    </div>
-                    <div style="
-                        background-color:{severity_color};
-                        color:white;
-                        padding:6px 12px;
-                        border-radius:20px;
-                        font-size:13px;
-                        font-weight:bold;
-                    ">
-                        {severity}
-                    </div>
-                </div>
-            </div>
-            """,
-            unsafe_allow_html=True
-        )
+    if "recommendations" not in parsed or not isinstance(parsed["recommendations"], list):
+        parsed["recommendations"] = []
 
-        with st.expander(f"View details for Issue {idx}", expanded=False):
-            col_a, col_b = st.columns(2)
+    return parsed
 
-            with col_a:
-                st.markdown(f"**Category:** {category}")
-                st.markdown(f"**Why it matters:** {explanation}")
-                st.markdown(f"**Future risk:** {future_risk}")
 
-            with col_b:
-                st.markdown(f"**Recommendation:** {recommendation}")
-                st.markdown(f"**Impact if not fixed:** {impact}")
+def run_smart_code_review(code_input: str) -> dict:
+    """
+    Smart code review entry point.
 
-            if current_code:
-                st.markdown("**Current Code**")
-                st.code(current_code, language="python")
+    Default behavior:
+    - Uses mock review output unless ENABLE_REAL_CODE_REVIEW=true
+    - Returns a safe structured response even on failure
+    """
+    try:
+        use_real_ai = str(os.getenv("ENABLE_REAL_CODE_REVIEW", "false")).strip().lower() == "true"
 
-            if suggested_code:
-                st.markdown("**Suggested Improved Code**")
-                st.code(suggested_code, language="python")
+        if use_real_ai:
+            return _run_ai_code_review(code_input)
 
-            st.text_area(
-                "Quick Fix Summary",
-                value=f"""Issue: {title}
-File: {file_name}
-Function: {function_name}
-Line: {line_no}
-Severity: {severity}
+        return _build_mock_review(code_input)
 
-Why:
-{explanation}
-
-Fix:
-{recommendation}""",
-                height=180,
-                key=f"summary_{idx}"
-            )
-
-            st.download_button(
-                label=f"Download Issue {idx} Details",
-                data=f"""
-Issue {idx}: {title}
-
-File: {file_name}
-Function: {function_name}
-Line: {line_no}
-Severity: {severity}
-Category: {category}
-
-Why it matters:
-{explanation}
-
-Future risk:
-{future_risk}
-
-Recommendation:
-{recommendation}
-
-Impact if not fixed:
-{impact}
-
-Current Code:
-{current_code}
-
-Suggested Code:
-{suggested_code}
-                """,
-                file_name=f"issue_{idx}_review.txt",
-                mime="text/plain",
-                key=f"download_issue_{idx}"
-            )
+    except Exception as e:
+        return {
+            "success": False,
+            "error": str(e),
+            "summary": {
+                "total_issues": 0,
+                "high": 0,
+                "medium": 0,
+                "low": 0,
+                "overall_health": "Unavailable",
+                "text": "Smart code review service failed."
+            },
+            "issues": [],
+            "recommendations": []
+        }
