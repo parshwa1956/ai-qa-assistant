@@ -1297,29 +1297,25 @@ def generate_story_ac_traceability_output(title, context, source_filename=""):
     prompt = f"""
 You are a senior business analyst.
 
-Convert the requirement into structured user stories with matching acceptance criteria and traceability.
+Convert the requirement into structured user stories with detailed acceptance criteria and rich traceability.
 
 Important rules:
-1. Return rich business detail when available from the requirement.
-2. Do not keep traceability to just one short line.
-3. For each story, include:
-   - detailed Notes
-   - Business Rules / Details
-   - Acceptance Criteria Summary
-   - Source File
-   - Source Section
-   - Page
-   - Line Start
-   - Line End
-   - Source Excerpt
-   - Mapping Type
-   - Traceability Notes
-4. If exact line numbers are not available, leave them blank.
-5. If page/section is not available, provide the best available traceability from the requirement text.
-6. Mapping Type must be one of:
+1. Generate as many user stories as reasonably supported by the requirement.
+2. For each story, generate as many acceptance criteria as possible when supported by the source.
+3. For each story, generate ALL possible traceability references from the requirement text, file content, sections, rows, headings, or excerpts.
+4. Do not return only one traceability line.
+5. Traceability must be returned as a LIST under "Traceability".
+6. Return rich business detail when available from the requirement.
+7. If exact page or line numbers are not available, leave them blank.
+8. If section or sheet names are not available, infer the best available section / heading / area.
+9. Mapping Type must be one of:
    - explicit
    - derived
    - assumed
+10. Confidence must be one of:
+   - high
+   - medium
+   - low
 
 Title: {title}
 Requirement Details:
@@ -1349,14 +1345,21 @@ Use this exact JSON structure:
         "AC 3"
       ],
       "Acceptance Criteria Summary": "",
-      "Source File": "",
-      "Source Section": "",
-      "Page": "",
-      "Line Start": "",
-      "Line End": "",
-      "Source Excerpt": "",
-      "Mapping Type": "explicit",
-      "Traceability Notes": ""
+      "Traceability": [
+        {{
+          "Source File": "",
+          "Source Section": "",
+          "Sheet Name": "",
+          "Page": "",
+          "Line Start": "",
+          "Line End": "",
+          "Column / Field": "",
+          "Source Excerpt": "",
+          "Mapping Type": "explicit",
+          "Confidence": "high",
+          "Traceability Notes": ""
+        }}
+      ]
     }}
   ]
 }}
@@ -1371,13 +1374,41 @@ Use this exact JSON structure:
     parsed = parse_json_response(content)
     stories = parsed["stories"]
 
+    flattened_rows = []
     pretty_blocks = []
+
     for s in stories:
         acceptance_criteria = s.get("Acceptance Criteria", [])
         if isinstance(acceptance_criteria, list):
             ac_text = "\n".join([f"- {item}" for item in acceptance_criteria])
+            ac_count = len(acceptance_criteria)
         else:
             ac_text = str(acceptance_criteria)
+            ac_count = 1 if str(acceptance_criteria).strip() else 0
+
+        traceability_items = s.get("Traceability", [])
+        if not isinstance(traceability_items, list):
+            traceability_items = []
+
+        trace_lines = []
+        for idx, t in enumerate(traceability_items, start=1):
+            trace_lines.append(
+                f"""[{idx}]
+Source File: {t.get('Source File', '')}
+Source Section: {t.get('Source Section', '')}
+Sheet Name: {t.get('Sheet Name', '')}
+Page: {t.get('Page', '')}
+Line Start: {t.get('Line Start', '')}
+Line End: {t.get('Line End', '')}
+Column / Field: {t.get('Column / Field', '')}
+Source Excerpt: {t.get('Source Excerpt', '')}
+Mapping Type: {t.get('Mapping Type', '')}
+Confidence: {t.get('Confidence', '')}
+Traceability Notes: {t.get('Traceability Notes', '')}"""
+            )
+
+        traceability_text = "\n\n".join(trace_lines) if trace_lines else "No detailed traceability found."
+        traceability_count = len(traceability_items)
 
         pretty_blocks.append(
             f"""User Story ID: {s.get('User Story ID', '')}
@@ -1389,29 +1420,33 @@ Priority: {s.get('Priority', '')}
 Notes: {s.get('Notes', '')}
 Business Rules / Details: {s.get('Business Rules / Details', '')}
 
-Acceptance Criteria:
+Acceptance Criteria ({ac_count}):
 {ac_text}
 
 Acceptance Criteria Summary: {s.get('Acceptance Criteria Summary', '')}
 
-Traceability:
-Source File: {s.get('Source File', '')}
-Source Section: {s.get('Source Section', '')}
-Page: {s.get('Page', '')}
-Line Start: {s.get('Line Start', '')}
-Line End: {s.get('Line End', '')}
-Source Excerpt: {s.get('Source Excerpt', '')}
-Mapping Type: {s.get('Mapping Type', '')}
-Traceability Notes: {s.get('Traceability Notes', '')}"""
+Traceability References ({traceability_count}):
+{traceability_text}"""
         )
+
+        flattened_rows.append({
+            "User Story ID": s.get("User Story ID", ""),
+            "Story Title": s.get("Story Title", ""),
+            "As a": s.get("As a", ""),
+            "I want": s.get("I want", ""),
+            "So that": s.get("So that", ""),
+            "Priority": s.get("Priority", ""),
+            "Notes": s.get("Notes", ""),
+            "Business Rules / Details": s.get("Business Rules / Details", ""),
+            "Acceptance Criteria Count": ac_count,
+            "Acceptance Criteria": ac_text,
+            "Acceptance Criteria Summary": s.get("Acceptance Criteria Summary", ""),
+            "Traceability Count": traceability_count,
+            "Traceability Details": traceability_text,
+        })
 
     pretty_text = "\n\n" + ("\n" + "-" * 100 + "\n").join(pretty_blocks)
-    df = pd.DataFrame(stories)
-
-    if "Acceptance Criteria" in df.columns:
-        df["Acceptance Criteria"] = df["Acceptance Criteria"].apply(
-            lambda x: "\n".join([f"- {i}" for i in x]) if isinstance(x, list) else str(x)
-        )
+    df = pd.DataFrame(flattened_rows)
 
     preferred_order = [
         "User Story ID",
@@ -1420,18 +1455,13 @@ Traceability Notes: {s.get('Traceability Notes', '')}"""
         "I want",
         "So that",
         "Priority",
+        "Acceptance Criteria Count",
+        "Traceability Count",
         "Acceptance Criteria Summary",
-        "Mapping Type",
-        "Page",
-        "Source Section",
         "Notes",
         "Business Rules / Details",
         "Acceptance Criteria",
-        "Source File",
-        "Line Start",
-        "Line End",
-        "Source Excerpt",
-        "Traceability Notes",
+        "Traceability Details",
     ]
     existing_cols = [c for c in preferred_order if c in df.columns]
     remaining_cols = [c for c in df.columns if c not in existing_cols]
@@ -1796,10 +1826,6 @@ def dataframe_to_pretty_text(df: pd.DataFrame, output_type: str, mermaid_code: s
     if output_type == "User Story + Acceptance Criteria + Traceability":
         blocks = []
         for row in records:
-            ac_text = row.get("Acceptance Criteria", "")
-            if isinstance(ac_text, list):
-                ac_text = "\n".join([f"- {i}" for i in ac_text])
-
             block = f"""User Story ID: {row.get('User Story ID', '')}
 Story Title: {row.get('Story Title', '')}
 As a: {row.get('As a', '')}
@@ -1809,20 +1835,15 @@ Priority: {row.get('Priority', '')}
 Notes: {row.get('Notes', '')}
 Business Rules / Details: {row.get('Business Rules / Details', '')}
 
+Acceptance Criteria Count: {row.get('Acceptance Criteria Count', '')}
 Acceptance Criteria:
-{ac_text}
+{row.get('Acceptance Criteria', '')}
 
 Acceptance Criteria Summary: {row.get('Acceptance Criteria Summary', '')}
 
+Traceability Count: {row.get('Traceability Count', '')}
 Traceability Details:
-Source File: {row.get('Source File', '')}
-Source Section: {row.get('Source Section', '')}
-Page: {row.get('Page', '')}
-Line Start: {row.get('Line Start', '')}
-Line End: {row.get('Line End', '')}
-Source Excerpt: {row.get('Source Excerpt', '')}
-Mapping Type: {row.get('Mapping Type', '')}
-Traceability Notes: {row.get('Traceability Notes', '')}"""
+{row.get('Traceability Details', '')}"""
             blocks.append(block)
 
         return "\n\n" + ("\n" + "-" * 100 + "\n").join(blocks)
@@ -1908,10 +1929,6 @@ def build_row_summary(row_dict: dict, output_type: str, fallback_title: str) -> 
 
 
 def build_story_ac_traceability_description(row_dict: dict) -> str:
-    acceptance_criteria = row_dict.get("Acceptance Criteria", "")
-    if isinstance(acceptance_criteria, list):
-        acceptance_criteria = "\n".join([f"- {item}" for item in acceptance_criteria])
-
     return f"""User Story:
 Story Title: {row_dict.get('Story Title', '')}
 As a: {row_dict.get('As a', '')}
@@ -1927,21 +1944,20 @@ Notes:
 Business Rules / Details:
 {row_dict.get('Business Rules / Details', '')}
 
+Acceptance Criteria Count:
+{row_dict.get('Acceptance Criteria Count', '')}
+
 Acceptance Criteria:
-{acceptance_criteria}
+{row_dict.get('Acceptance Criteria', '')}
 
 Acceptance Criteria Summary:
 {row_dict.get('Acceptance Criteria Summary', '')}
 
-Traceability:
-Source File: {row_dict.get('Source File', '')}
-Source Section: {row_dict.get('Source Section', '')}
-Page: {row_dict.get('Page', '')}
-Line Start: {row_dict.get('Line Start', '')}
-Line End: {row_dict.get('Line End', '')}
-Source Excerpt: {row_dict.get('Source Excerpt', '')}
-Mapping Type: {row_dict.get('Mapping Type', '')}
-Traceability Notes: {row_dict.get('Traceability Notes', '')}
+Traceability Count:
+{row_dict.get('Traceability Count', '')}
+
+Traceability Details:
+{row_dict.get('Traceability Details', '')}
 """
 
 
@@ -2866,38 +2882,4 @@ def render_main_app():
         return
 
     render_workspace_header()
-    render_workspace_buttons()
-
-    workspace = st.session_state.active_workspace
-
-    if workspace == "QA Workspace":
-        render_qa_workspace(user, selected_project)
-    elif workspace == "BA Workspace":
-        render_ba_workspace(user, selected_project)
-    elif workspace == "Dev Workspace":
-        render_dev_workspace(user, selected_project)
-    elif workspace == "Flow to Requirement":
-        render_flow_workspace()
-
-
-# ------------------------------
-# Boot existing auth session once
-# ------------------------------
-if not st.session_state.auth_checked:
-    load_user_from_existing_session()
-    st.session_state.auth_checked = True
-
-
-# ------------------------------
-# Handle logout from header link
-# ------------------------------
-if st.query_params.get("do_logout") == "1":
-    sign_out_user()
-    st.query_params.clear()
-    st.rerun()
-
-
-# ------------------------------
-# Run app
-# ------------------------------
-render_main_app()
+    render_workspace_bu
