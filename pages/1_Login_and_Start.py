@@ -2882,4 +2882,38 @@ def render_main_app():
         return
 
     render_workspace_header()
-    render_workspace_bu
+    render_workspace_buttons()
+
+    workspace = st.session_state.active_workspace
+
+    if workspace == "QA Workspace":
+        render_qa_workspace(user, selected_project)
+    elif workspace == "BA Workspace":
+        render_ba_workspace(user, selected_project)
+    elif workspace == "Dev Workspace":
+        render_dev_workspace(user, selected_project)
+    elif workspace == "Flow to Requirement":
+        render_flow_workspace()
+
+
+# ------------------------------
+# Boot existing auth session once
+# ------------------------------
+if not st.session_state.auth_checked:
+    load_user_from_existing_session()
+    st.session_state.auth_checked = True
+
+
+# ------------------------------
+# Handle logout from header link
+# ------------------------------
+if st.query_params.get("do_logout") == "1":
+    sign_out_user()
+    st.query_params.clear()
+    st.rerun()
+
+
+# ------------------------------
+# Run app
+# ------------------------------
+render_main_app()
