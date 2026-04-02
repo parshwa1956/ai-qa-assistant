@@ -15,8 +15,26 @@ from supabase import create_client, Client
 from openpyxl.styles import Font, Alignment, PatternFill
 from openpyxl.utils import get_column_letter
 
-from components.code_review_ui import render_code_review_results
-from services.code_review_service import run_smart_code_review
+try:
+    from components.code_review_ui import render_code_review_results
+except Exception:
+    def render_code_review_results(review_result):
+        st.json(review_result)
+
+try:
+    from services.code_review_service import run_smart_code_review
+except Exception:
+    def run_smart_code_review(code_input):
+        return {
+            "summary": {
+                "total_issues": 0,
+                "high": 0,
+                "medium": 0,
+                "low": 0,
+                "overall_health": "Unavailable"
+            },
+            "issues": []
+        }
 
 # ------------------------------
 # Load environment
