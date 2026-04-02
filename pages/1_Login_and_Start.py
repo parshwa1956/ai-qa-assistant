@@ -563,6 +563,17 @@ def read_uploaded_text_file(uploaded_file):
         return ""
 
 
+ALL_UPLOAD_FILE_TYPES = [
+    "pdf", "doc", "docx", "xls", "xlsx", "csv", "txt", "md",
+    "png", "jpg", "jpeg"
+]
+
+DEV_UPLOAD_FILE_TYPES = [
+    "py", "js", "ts", "java", "cs", "sql", "txt", "json", "md",
+    "pdf", "doc", "docx", "xls", "xlsx", "csv", "png", "jpg", "jpeg"
+]
+
+
 # ------------------------------
 # Auth helpers
 # ------------------------------
@@ -1437,7 +1448,7 @@ def reset_flow_output_if_new_file(uploaded_flow):
 
 def generate_requirements_from_flow(uploaded_flow):
     prompt = """
-Analyze this flow diagram and generate concise business requirements.
+Analyze this flow diagram or process file and generate concise business requirements.
 
 Return ONLY valid JSON.
 Do not add markdown.
@@ -1503,15 +1514,30 @@ Use this exact JSON structure:
                 }
             ],
         )
-
         content = response.output_text
+
     else:
-        raise ValueError("Unsupported file type. Please upload PNG, JPG, JPEG, or PDF.")
+        uploaded_text = read_uploaded_text_file(uploaded_flow)
+        if not uploaded_text.strip():
+            raise ValueError("This file type is uploaded successfully, but readable text could not be extracted.")
+
+        response = client.chat.completions.create(
+            model="gpt-4o-mini",
+            messages=[
+                {
+                    "role": "user",
+                    "content": f"{prompt}\n\nFile Content:\n{uploaded_text[:15000]}",
+                }
+            ],
+        )
+        content = response.choices[0].message.content
 
     parsed = parse_json_response(content)
     req = parsed["requirements"]
 
-    steps_text = "\n".join([f"{idx + 1}. {step}" for idx, step in enumerate(req.get("What Happens from Start to Finish", []))])
+    steps_text = "\n".join(
+        [f"{idx + 1}. {step}" for idx, step in enumerate(req.get("What Happens from Start to Finish", []))]
+    )
     decisions_text = "\n".join([f"- {item}" for item in req.get("Important Decisions", [])])
     test_data_text = "\n".join([f"- {item}" for item in req.get("Test Data Needed", [])])
 
@@ -1541,10 +1567,6 @@ Test Data Needed:
 
     return pretty_text, df
 
-
-# ------------------------------
-# Output / render helpers
-# ------------------------------
 def show_download_buttons(df, pretty_text, base_name, sheet_name):
     csv_data = convert_df_to_csv(df)
     excel_data = convert_df_to_excel(df, sheet_name=sheet_name)
@@ -2175,10 +2197,10 @@ def render_qa_workspace(user, selected_project):
     )
 
     uploaded_file = st.file_uploader(
-    "Upload File (Optional)",
-    type=["pdf", "doc", "docx", "xls", "xlsx", "csv", "txt", "md", "png", "jpg", "jpeg"],
-    key="qa_screenshot_upload",
-)
+        "Upload Supporting File (Optional)",
+        type=ALL_UPLOAD_FILE_TYPES,
+        key="qa_file_upload",
+    )
 
     output_type = st.selectbox(
         "What do you want to generate?",
@@ -2186,26 +2208,44 @@ def render_qa_workspace(user, selected_project):
         key="qa_output_type_select",
     )
 
-    is_form_valid = bool(title.strip()) and bool(context.strip())
+    uploaded_text = read_uploaded_text_file(uploaded_file)
+    full_context = context.strip()
+
+    if uploaded_text.strip():
+        if full_context:
+            full_context = f"{full_context}\n\nUploaded File Content:\n{uploaded_text}"
+        else:
+            full_context = uploaded_text
+
+    is_form_valid = bool(title.strip()) and bool(full_context.strip())
 
     if not is_form_valid:
-        st.info("Enter Title and Requirement Details to enable generation.")
+        st.info("Enter Title and Requirement Details, or upload a supporting file.")
 
     if st.button("Generate", disabled=not is_form_valid, key="qa_generate_btn"):
         try:
-            screenshot_path = upload_screenshot_to_storage(user.id, selected_project["id"], uploaded_file) if uploaded_file else None
+            screenshot_path = (
+                upload_screenshot_to_storage(user.id, selected_project["id"], uploaded_file)
+                if uploaded_file
+                else None
+            )
 
             with st.spinner(f"Generating {output_type}..."):
                 if output_type == "Bug Report":
-                    result_text, df = generate_bug_report_with_optional_image(title, context, uploaded_file)
+                    image_file = (
+                        uploaded_file
+                        if uploaded_file and uploaded_file.type in ["image/png", "image/jpg", "image/jpeg"]
+                        else None
+                    )
+                    result_text, df = generate_bug_report_with_optional_image(title, full_context, image_file)
                     sheet_name = "Bug_Report"
                     base_name = f"{safe_filename(title)}_bug_report"
                 elif output_type == "Test Cases":
-                    result_text, df = generate_test_cases(title, context)
+                    result_text, df = generate_test_cases(title, full_context)
                     sheet_name = "Test_Cases"
                     base_name = f"{safe_filename(title)}_test_cases"
                 else:
-                    result_text, df = generate_test_scenarios(title, context)
+                    result_text, df = generate_test_scenarios(title, full_context)
                     sheet_name = "Test_Scenarios"
                     base_name = f"{safe_filename(title)}_test_scenarios"
 
@@ -2216,7 +2256,7 @@ def render_qa_workspace(user, selected_project):
                 project_id=selected_project["id"],
                 item_type=output_type,
                 title=title,
-                input_context=context,
+                input_context=full_context,
                 output_text=result_text,
                 screenshot_path=screenshot_path,
                 source_filename=uploaded_file.name if uploaded_file else None,
@@ -2237,7 +2277,6 @@ def render_qa_workspace(user, selected_project):
             st.rerun()
         st.markdown("</div>", unsafe_allow_html=True)
 
-
 def render_ba_workspace(user, selected_project):
     st.markdown('<div class="clean-card">', unsafe_allow_html=True)
     st.subheader("BA Workspace")
@@ -2255,11 +2294,11 @@ def render_ba_workspace(user, selected_project):
         key="ba_context_input",
     )
 
-   uploaded_file = st.file_uploader(
-    "Upload File (Optional)",
-    type=["pdf", "doc", "docx", "xls", "xlsx", "csv", "txt", "md", "png", "jpg", "jpeg"],
-    key="qa_screenshot_upload",
-)
+    uploaded_ba_file = st.file_uploader(
+        "Upload Requirement File (Optional)",
+        type=ALL_UPLOAD_FILE_TYPES,
+        key="ba_file_upload",
+    )
 
     output_type = st.selectbox(
         "Choose Output",
@@ -2297,7 +2336,15 @@ def render_ba_workspace(user, selected_project):
                     mermaid_code = ""
 
             base_name = f"{safe_filename(title)}_{safe_filename(output_type)}"
-            set_current_output(output_type, title, result_text, df, base_name, "BA_Output", mermaid_code=mermaid_code)
+            set_current_output(
+                output_type,
+                title,
+                result_text,
+                df,
+                base_name,
+                "BA_Output",
+                mermaid_code=mermaid_code,
+            )
 
             save_item(
                 user_id=user.id,
@@ -2330,7 +2377,6 @@ def render_ba_workspace(user, selected_project):
             st.rerun()
         st.markdown("</div>", unsafe_allow_html=True)
 
-
 def render_dev_workspace(user, selected_project):
     st.markdown('<div class="clean-card">', unsafe_allow_html=True)
     st.subheader("Dev Workspace")
@@ -2349,9 +2395,9 @@ def render_dev_workspace(user, selected_project):
     )
 
     uploaded_dev_file = st.file_uploader(
-        "Upload Code File (Optional)",
-        type=["py", "js", "ts", "java", "cs", "sql", "txt", "json", "md"],
-        key="dev_code_upload",
+        "Upload Dev File (Optional)",
+        type=DEV_UPLOAD_FILE_TYPES,
+        key="dev_file_upload",
     )
 
     language = st.selectbox(
@@ -2387,7 +2433,7 @@ def render_dev_workspace(user, selected_project):
     is_valid = bool(title.strip()) and bool(full_context.strip())
 
     if not is_valid:
-        st.info("Enter title and technical context, or upload a code file.")
+        st.info("Enter title and technical context, or upload a dev file.")
 
     if st.button("Generate Dev Output", disabled=not is_valid, key="dev_generate_btn"):
         try:
@@ -2408,7 +2454,15 @@ def render_dev_workspace(user, selected_project):
                 elif output_type == "Technical Flow Diagram":
                     result_text, df, mermaid_code = generate_flow_diagram_output(title, full_context, output_type)
                     base_name = f"{safe_filename(title)}_{safe_filename(output_type)}"
-                    set_current_output(output_type, title, result_text, df, base_name, "Dev_Output", mermaid_code=mermaid_code)
+                    set_current_output(
+                        output_type,
+                        title,
+                        result_text,
+                        df,
+                        base_name,
+                        "Dev_Output",
+                        mermaid_code=mermaid_code,
+                    )
                     save_item(
                         user_id=user.id,
                         project_id=selected_project["id"],
@@ -2421,7 +2475,15 @@ def render_dev_workspace(user, selected_project):
                 else:
                     result_text, df = generate_dev_output(title, full_context, output_type)
                     base_name = f"{safe_filename(title)}_{safe_filename(output_type)}"
-                    set_current_output(output_type, title, result_text, df, base_name, "Dev_Output", mermaid_code="")
+                    set_current_output(
+                        output_type,
+                        title,
+                        result_text,
+                        df,
+                        base_name,
+                        "Dev_Output",
+                        mermaid_code="",
+                    )
                     save_item(
                         user_id=user.id,
                         project_id=selected_project["id"],
@@ -2453,16 +2515,15 @@ def render_dev_workspace(user, selected_project):
             st.rerun()
         st.markdown("</div>", unsafe_allow_html=True)
 
-
 def render_flow_workspace():
     st.markdown('<div class="clean-card">', unsafe_allow_html=True)
     st.subheader("Flow to Requirement")
 
-    uploaded_file = st.file_uploader(
-    "Upload File (Optional)",
-    type=["pdf", "doc", "docx", "xls", "xlsx", "csv", "txt", "md", "png", "jpg", "jpeg"],
-    key="qa_screenshot_upload",
-)
+    uploaded_flow = st.file_uploader(
+        "Upload Flow File (Optional)",
+        type=ALL_UPLOAD_FILE_TYPES,
+        key="flow_file_upload",
+    )
 
     if uploaded_flow is not None:
         reset_flow_output_if_new_file(uploaded_flow)
@@ -2471,6 +2532,8 @@ def render_flow_workspace():
             st.image(uploaded_flow, caption="Uploaded Flow Diagram", use_container_width=True)
         elif uploaded_flow.type == "application/pdf":
             st.info(f"PDF uploaded: {uploaded_flow.name}")
+        else:
+            st.info(f"Uploaded file: {uploaded_flow.name}")
 
     flow_btn = st.button(
         "Generate Requirements",
@@ -2519,10 +2582,6 @@ def render_flow_workspace():
 
         st.markdown("</div>", unsafe_allow_html=True)
 
-
-# ------------------------------
-# Main app UI
-# ------------------------------
 def render_main_app():
     user = st.session_state.user
     if not user:
