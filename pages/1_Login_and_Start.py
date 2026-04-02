@@ -15,8 +15,32 @@ from supabase import create_client, Client
 from openpyxl.styles import Font, Alignment, PatternFill
 from openpyxl.utils import get_column_letter
 
-from components.code_review_ui import render_code_review_results
-from services.code_review_service import run_smart_code_review
+SMART_REVIEW_IMPORT_ERROR = None
+
+try:
+    from components.code_review_ui import render_code_review_results
+except Exception as e:
+    SMART_REVIEW_IMPORT_ERROR = f"components import failed: {e}"
+
+    def render_code_review_results(review_result):
+        st.error("Code review UI could not load.")
+        st.write(SMART_REVIEW_IMPORT_ERROR)
+        st.json(review_result)
+
+try:
+    from services.code_review_service import run_smart_code_review
+except Exception as e:
+    existing = SMART_REVIEW_IMPORT_ERROR or ""
+    SMART_REVIEW_IMPORT_ERROR = f"{existing}\nservices import failed: {e}".strip()
+
+    def run_smart_code_review(*args, **kwargs):
+        return {
+            "success": False,
+            "error": SMART_REVIEW_IMPORT_ERROR,
+            "summary": "Smart code review service is unavailable.",
+            "issues": [],
+            "recommendations": [],
+        }
 
 # ------------------------------
 # Load environment
