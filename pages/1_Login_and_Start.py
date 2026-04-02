@@ -552,13 +552,40 @@ def now_iso():
     return datetime.now(timezone.utc).isoformat()
 
 
+def clean_text_for_storage(text):
+    if text is None:
+        return ""
+    if not isinstance(text, str):
+        text = str(text)
+
+    text = text.replace("\x00", "")
+
+    cleaned = []
+    for ch in text:
+        if ch in ("\n", "\r", "\t") or ord(ch) >= 32:
+            cleaned.append(ch)
+
+    return "".join(cleaned)
+
+
+def trim_text_for_prompt(text: str, max_chars: int = 15000) -> str:
+    text = clean_text_for_storage(text)
+    if not text:
+        return ""
+    text = text.strip()
+    if len(text) <= max_chars:
+        return text
+    return text[:max_chars] + "\n\n[Content truncated because uploaded file was too large.]"
+
+
 def read_uploaded_text_file(uploaded_file):
     if uploaded_file is None:
         return ""
     try:
         file_bytes = uploaded_file.read()
         uploaded_file.seek(0)
-        return file_bytes.decode("utf-8", errors="ignore")
+        text = file_bytes.decode("utf-8", errors="ignore")
+        return clean_text_for_storage(text)
     except Exception:
         return ""
 
@@ -786,6 +813,7 @@ def delete_project(project_id: str, user_id: str):
     return True, f"Project '{project['name']}' deleted."
 
 
+
 def save_item(
     user_id: str,
     project_id: str,
@@ -801,12 +829,12 @@ def save_item(
     payload = {
         "user_id": user_id,
         "project_id": project_id,
-        "item_type": item_type,
-        "title": title.strip(),
-        "input_context": input_context.strip(),
-        "output_text": output_text.strip(),
+        "item_type": clean_text_for_storage(item_type).strip(),
+        "title": clean_text_for_storage(title).strip(),
+        "input_context": clean_text_for_storage(input_context).strip(),
+        "output_text": clean_text_for_storage(output_text).strip(),
         "screenshot_path": screenshot_path,
-        "source_filename": source_filename,
+        "source_filename": clean_text_for_storage(source_filename) if source_filename else None,
         "created_at": now_iso(),
     }
     return supabase.table("saved_items").insert(payload).execute()
@@ -869,6 +897,7 @@ def get_default_jira_issue_type(output_type):
         "Test Scenarios": "Story",
         "Requirement to User Story": "Story",
         "Acceptance Criteria Generator": "Task",
+        "User Story + Acceptance Criteria + Traceability": "Story",
         "Business Requirement Breakdown": "Task",
         "Business Process Flow": "Task",
         "Data Flow Diagram": "Task",
@@ -888,6 +917,7 @@ def get_default_jira_labels(output_type):
         "Test Scenarios": ["story"],
         "Requirement to User Story": ["story"],
         "Acceptance Criteria Generator": ["acceptance-criteria"],
+        "User Story + Acceptance Criteria + Traceability": ["story", "acceptance-criteria", "traceability"],
         "Business Requirement Breakdown": ["business-requirement"],
         "Business Process Flow": ["process-flow"],
         "Data Flow Diagram": ["data-flow"],
@@ -1139,6 +1169,7 @@ Notes: {sc.get('Notes', '')}
     return pretty_text, df
 
 
+
 def generate_ba_output(title, context, output_type):
     prompt_map = {
         "Requirement to User Story": f"""
@@ -1260,6 +1291,153 @@ Notes: {r.get('Notes', '')}"""
 
     df = pd.DataFrame(records)
     return pretty, df
+
+
+def generate_story_ac_traceability_output(title, context, source_filename=""):
+    prompt = f"""
+You are a senior business analyst.
+
+Convert the requirement into structured user stories with matching acceptance criteria and traceability.
+
+Important rules:
+1. Return rich business detail when available from the requirement.
+2. Do not keep traceability to just one short line.
+3. For each story, include:
+   - detailed Notes
+   - Business Rules / Details
+   - Acceptance Criteria Summary
+   - Source File
+   - Source Section
+   - Page
+   - Line Start
+   - Line End
+   - Source Excerpt
+   - Mapping Type
+   - Traceability Notes
+4. If exact line numbers are not available, leave them blank.
+5. If page/section is not available, provide the best available traceability from the requirement text.
+6. Mapping Type must be one of:
+   - explicit
+   - derived
+   - assumed
+
+Title: {title}
+Requirement Details:
+{context}
+
+Source File Name: {source_filename}
+
+Return ONLY valid JSON.
+Do not add markdown.
+Do not add explanation text.
+
+Use this exact JSON structure:
+{{
+  "stories": [
+    {{
+      "User Story ID": "US_001",
+      "Story Title": "",
+      "As a": "",
+      "I want": "",
+      "So that": "",
+      "Priority": "",
+      "Notes": "",
+      "Business Rules / Details": "",
+      "Acceptance Criteria": [
+        "AC 1",
+        "AC 2",
+        "AC 3"
+      ],
+      "Acceptance Criteria Summary": "",
+      "Source File": "",
+      "Source Section": "",
+      "Page": "",
+      "Line Start": "",
+      "Line End": "",
+      "Source Excerpt": "",
+      "Mapping Type": "explicit",
+      "Traceability Notes": ""
+    }}
+  ]
+}}
+"""
+
+    response = client.chat.completions.create(
+        model="gpt-4o-mini",
+        messages=[{"role": "user", "content": prompt}],
+    )
+
+    content = response.choices[0].message.content
+    parsed = parse_json_response(content)
+    stories = parsed["stories"]
+
+    pretty_blocks = []
+    for s in stories:
+        acceptance_criteria = s.get("Acceptance Criteria", [])
+        if isinstance(acceptance_criteria, list):
+            ac_text = "\n".join([f"- {item}" for item in acceptance_criteria])
+        else:
+            ac_text = str(acceptance_criteria)
+
+        pretty_blocks.append(
+            f"""User Story ID: {s.get('User Story ID', '')}
+Story Title: {s.get('Story Title', '')}
+As a: {s.get('As a', '')}
+I want: {s.get('I want', '')}
+So that: {s.get('So that', '')}
+Priority: {s.get('Priority', '')}
+Notes: {s.get('Notes', '')}
+Business Rules / Details: {s.get('Business Rules / Details', '')}
+
+Acceptance Criteria:
+{ac_text}
+
+Acceptance Criteria Summary: {s.get('Acceptance Criteria Summary', '')}
+
+Traceability:
+Source File: {s.get('Source File', '')}
+Source Section: {s.get('Source Section', '')}
+Page: {s.get('Page', '')}
+Line Start: {s.get('Line Start', '')}
+Line End: {s.get('Line End', '')}
+Source Excerpt: {s.get('Source Excerpt', '')}
+Mapping Type: {s.get('Mapping Type', '')}
+Traceability Notes: {s.get('Traceability Notes', '')}"""
+        )
+
+    pretty_text = "\n\n" + ("\n" + "-" * 100 + "\n").join(pretty_blocks)
+    df = pd.DataFrame(stories)
+
+    if "Acceptance Criteria" in df.columns:
+        df["Acceptance Criteria"] = df["Acceptance Criteria"].apply(
+            lambda x: "\n".join([f"- {i}" for i in x]) if isinstance(x, list) else str(x)
+        )
+
+    preferred_order = [
+        "User Story ID",
+        "Story Title",
+        "As a",
+        "I want",
+        "So that",
+        "Priority",
+        "Acceptance Criteria Summary",
+        "Mapping Type",
+        "Page",
+        "Source Section",
+        "Notes",
+        "Business Rules / Details",
+        "Acceptance Criteria",
+        "Source File",
+        "Line Start",
+        "Line End",
+        "Source Excerpt",
+        "Traceability Notes",
+    ]
+    existing_cols = [c for c in preferred_order if c in df.columns]
+    remaining_cols = [c for c in df.columns if c not in existing_cols]
+    df = df[existing_cols + remaining_cols]
+
+    return pretty_text, df
 
 
 def generate_dev_output(title, context, output_type):
@@ -1601,6 +1779,7 @@ def show_download_buttons(df, pretty_text, base_name, sheet_name):
         )
 
 
+
 def dataframe_to_pretty_text(df: pd.DataFrame, output_type: str, mermaid_code: str = "") -> str:
     working_df = df.copy()
 
@@ -1613,6 +1792,40 @@ def dataframe_to_pretty_text(df: pd.DataFrame, output_type: str, mermaid_code: s
         if not records:
             return ""
         return "\n".join([f"{k}: {v}" for k, v in records[0].items()])
+
+    if output_type == "User Story + Acceptance Criteria + Traceability":
+        blocks = []
+        for row in records:
+            ac_text = row.get("Acceptance Criteria", "")
+            if isinstance(ac_text, list):
+                ac_text = "\n".join([f"- {i}" for i in ac_text])
+
+            block = f"""User Story ID: {row.get('User Story ID', '')}
+Story Title: {row.get('Story Title', '')}
+As a: {row.get('As a', '')}
+I want: {row.get('I want', '')}
+So that: {row.get('So that', '')}
+Priority: {row.get('Priority', '')}
+Notes: {row.get('Notes', '')}
+Business Rules / Details: {row.get('Business Rules / Details', '')}
+
+Acceptance Criteria:
+{ac_text}
+
+Acceptance Criteria Summary: {row.get('Acceptance Criteria Summary', '')}
+
+Traceability Details:
+Source File: {row.get('Source File', '')}
+Source Section: {row.get('Source Section', '')}
+Page: {row.get('Page', '')}
+Line Start: {row.get('Line Start', '')}
+Line End: {row.get('Line End', '')}
+Source Excerpt: {row.get('Source Excerpt', '')}
+Mapping Type: {row.get('Mapping Type', '')}
+Traceability Notes: {row.get('Traceability Notes', '')}"""
+            blocks.append(block)
+
+        return "\n\n" + ("\n" + "-" * 100 + "\n").join(blocks)
 
     blocks = []
     for row in records:
@@ -1662,6 +1875,7 @@ def set_smart_code_review_output(title: str, review_result: dict):
     st.session_state.smart_review_result = review_result
 
 
+
 def build_row_summary(row_dict: dict, output_type: str, fallback_title: str) -> str:
     candidates = {
         "Bug Report": ["Title"],
@@ -1669,6 +1883,7 @@ def build_row_summary(row_dict: dict, output_type: str, fallback_title: str) -> 
         "Test Scenarios": ["Scenario", "Scenario ID", "Title"],
         "Requirement to User Story": ["I want", "User Story ID", "Section"],
         "Acceptance Criteria Generator": ["Criteria", "AC ID"],
+        "User Story + Acceptance Criteria + Traceability": ["Story Title", "I want", "User Story ID"],
         "Business Requirement Breakdown": ["Section", "Details"],
         "Business Process Flow": ["Action", "Step ID"],
         "Data Flow Diagram": ["Action", "Step ID"],
@@ -1690,6 +1905,44 @@ def build_row_summary(row_dict: dict, output_type: str, fallback_title: str) -> 
             return text[:200]
 
     return fallback_title
+
+
+def build_story_ac_traceability_description(row_dict: dict) -> str:
+    acceptance_criteria = row_dict.get("Acceptance Criteria", "")
+    if isinstance(acceptance_criteria, list):
+        acceptance_criteria = "\n".join([f"- {item}" for item in acceptance_criteria])
+
+    return f"""User Story:
+Story Title: {row_dict.get('Story Title', '')}
+As a: {row_dict.get('As a', '')}
+I want: {row_dict.get('I want', '')}
+So that: {row_dict.get('So that', '')}
+
+Priority:
+{row_dict.get('Priority', '')}
+
+Notes:
+{row_dict.get('Notes', '')}
+
+Business Rules / Details:
+{row_dict.get('Business Rules / Details', '')}
+
+Acceptance Criteria:
+{acceptance_criteria}
+
+Acceptance Criteria Summary:
+{row_dict.get('Acceptance Criteria Summary', '')}
+
+Traceability:
+Source File: {row_dict.get('Source File', '')}
+Source Section: {row_dict.get('Source Section', '')}
+Page: {row_dict.get('Page', '')}
+Line Start: {row_dict.get('Line Start', '')}
+Line End: {row_dict.get('Line End', '')}
+Source Excerpt: {row_dict.get('Source Excerpt', '')}
+Mapping Type: {row_dict.get('Mapping Type', '')}
+Traceability Notes: {row_dict.get('Traceability Notes', '')}
+"""
 
 
 def render_row_level_jira(output_type: str, generated_title: str, edited_df: pd.DataFrame):
@@ -1735,7 +1988,10 @@ def render_row_level_jira(output_type: str, generated_title: str, edited_df: pd.
             for _, row in selected_rows.iterrows():
                 row_dict = row.to_dict()
                 summary = build_row_summary(row_dict, output_type, generated_title)
-                description = "\n".join([f"{k}: {v}" for k, v in row_dict.items()])
+                if output_type == "User Story + Acceptance Criteria + Traceability":
+                    description = build_story_ac_traceability_description(row_dict)
+                else:
+                    description = "\n".join([f"{k}: {v}" for k, v in row_dict.items()])
 
                 success, message = create_jira_issue(
                     jira_base_url=jira_config["jira_base_url"],
@@ -2277,6 +2533,7 @@ def render_qa_workspace(user, selected_project):
             st.rerun()
         st.markdown("</div>", unsafe_allow_html=True)
 
+
 def render_ba_workspace(user, selected_project):
     st.markdown('<div class="clean-card">', unsafe_allow_html=True)
     st.subheader("BA Workspace")
@@ -2305,6 +2562,7 @@ def render_ba_workspace(user, selected_project):
         [
             "Requirement to User Story",
             "Acceptance Criteria Generator",
+            "User Story + Acceptance Criteria + Traceability",
             "Business Requirement Breakdown",
             "Business Process Flow",
             "Data Flow Diagram",
@@ -2313,13 +2571,17 @@ def render_ba_workspace(user, selected_project):
     )
 
     uploaded_text = read_uploaded_text_file(uploaded_ba_file)
-    full_context = context.strip()
+    trimmed_uploaded_text = trim_text_for_prompt(uploaded_text, 15000)
+    full_context = clean_text_for_storage(context).strip()
 
-    if uploaded_text.strip():
+    if trimmed_uploaded_text.strip():
         if full_context:
-            full_context = f"{full_context}\n\nUploaded File Content:\n{uploaded_text}"
+            full_context = f"{full_context}\n\nUploaded File Content:\n{trimmed_uploaded_text}"
         else:
-            full_context = uploaded_text
+            full_context = trimmed_uploaded_text
+
+    if uploaded_text and len(uploaded_text) > 15000:
+        st.warning("Uploaded file is large, so only the first portion was used for generation.")
 
     is_valid = bool(title.strip()) and bool(full_context.strip())
 
@@ -2331,6 +2593,13 @@ def render_ba_workspace(user, selected_project):
             with st.spinner(f"Generating {output_type}..."):
                 if output_type in ["Business Process Flow", "Data Flow Diagram"]:
                     result_text, df, mermaid_code = generate_flow_diagram_output(title, full_context, output_type)
+                elif output_type == "User Story + Acceptance Criteria + Traceability":
+                    result_text, df = generate_story_ac_traceability_output(
+                        title,
+                        full_context,
+                        uploaded_ba_file.name if uploaded_ba_file else "",
+                    )
+                    mermaid_code = ""
                 else:
                     result_text, df = generate_ba_output(title, full_context, output_type)
                     mermaid_code = ""
@@ -2366,6 +2635,7 @@ def render_ba_workspace(user, selected_project):
     if st.session_state.generated_type in [
         "Requirement to User Story",
         "Acceptance Criteria Generator",
+        "User Story + Acceptance Criteria + Traceability",
         "Business Requirement Breakdown",
         "Business Process Flow",
         "Data Flow Diagram",
@@ -2376,6 +2646,7 @@ def render_ba_workspace(user, selected_project):
             clear_generated_output_state()
             st.rerun()
         st.markdown("</div>", unsafe_allow_html=True)
+
 
 def render_dev_workspace(user, selected_project):
     st.markdown('<div class="clean-card">', unsafe_allow_html=True)
