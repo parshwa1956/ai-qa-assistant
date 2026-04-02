@@ -15,38 +15,9 @@ from supabase import create_client, Client
 from openpyxl.styles import Font, Alignment, PatternFill
 from openpyxl.utils import get_column_letter
 
-SMART_REVIEW_IMPORT_ERROR = None
+from components.code_review_ui import render_code_review_results
+from services.code_review_service import run_smart_code_review
 
-try:
-    from components.code_review_ui import render_code_review_results
-except Exception as e:
-    SMART_REVIEW_IMPORT_ERROR = f"components import failed: {e}"
-
-    def render_code_review_results(review_result):
-        st.json(review_result)
-
-try:
-    from services.code_review_service import run_smart_code_review
-except Exception as e:
-    existing = SMART_REVIEW_IMPORT_ERROR or ""
-    SMART_REVIEW_IMPORT_ERROR = f"{existing}\nservices import failed: {e}".strip()
-
-    def run_smart_code_review(code_input):
-        return {
-            "summary": {
-                "total_issues": 0,
-                "high": 0,
-                "medium": 0,
-                "low": 0,
-                "overall_health": "Unavailable"
-            },
-            "issues": []
-        }
-
-# ------------------------------
-# Load environment
-# ------------------------------
-load_dotenv()
 # ------------------------------
 # Load environment
 # ------------------------------
@@ -1786,25 +1757,22 @@ def render_single_jira(output_type: str, generated_title: str, description_text:
         else:
             st.error(f"Failed to create Jira issue: {message}")
 
+
 def render_current_output():
     if st.session_state.generated_type == "Smart Code Review" and st.session_state.smart_review_result:
-    st.subheader("Generated Smart Code Review")
+        st.subheader("Generated Smart Code Review")
+        render_code_review_results(st.session_state.smart_review_result)
 
-    if SMART_REVIEW_IMPORT_ERROR:
-        st.error(f"Smart Code Review import issue: {SMART_REVIEW_IMPORT_ERROR}")
-
-    render_code_review_results(st.session_state.smart_review_result)
-
-    json_text = json.dumps(st.session_state.smart_review_result, indent=2)
-    st.download_button(
-        label="Download Smart Code Review JSON",
-        data=json_text,
-        file_name=f"{st.session_state.generated_base_name}.json",
-        mime="application/json",
-        use_container_width=True,
-        key="download_smart_code_review_json",
-    )
-    return
+        json_text = json.dumps(st.session_state.smart_review_result, indent=2)
+        st.download_button(
+            label="Download Smart Code Review JSON",
+            data=json_text,
+            file_name=f"{st.session_state.generated_base_name}.json",
+            mime="application/json",
+            use_container_width=True,
+            key="download_smart_code_review_json",
+        )
+        return
 
     if st.session_state.generated_type and st.session_state.editable_output_df is not None:
         output_type = st.session_state.generated_type
