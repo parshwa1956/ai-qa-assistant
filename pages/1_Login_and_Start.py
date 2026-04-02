@@ -1785,8 +1785,12 @@ def render_single_jira(output_type: str, generated_title: str, description_text:
 
 def render_current_output():
     if st.session_state.generated_type == "Smart Code Review" and st.session_state.smart_review_result:
-        st.subheader("Generated Smart Code Review")
-        render_code_review_results(st.session_state.smart_review_result)
+    st.subheader("Generated Smart Code Review")
+
+    if SMART_REVIEW_IMPORT_ERROR:
+        st.error(f"Smart Code Review import issue: {SMART_REVIEW_IMPORT_ERROR}")
+
+    render_code_review_results(st.session_state.smart_review_result)
 
         json_text = json.dumps(st.session_state.smart_review_result, indent=2)
         st.download_button(
