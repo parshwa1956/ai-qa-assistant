@@ -2175,10 +2175,10 @@ def render_qa_workspace(user, selected_project):
     )
 
     uploaded_file = st.file_uploader(
-        "Upload Screenshot (Optional)",
-        type=["png", "jpg", "jpeg"],
-        key="qa_screenshot_upload",
-    )
+    "Upload File (Optional)",
+    type=["pdf", "doc", "docx", "xls", "xlsx", "csv", "txt", "md", "png", "jpg", "jpeg"],
+    key="qa_screenshot_upload",
+)
 
     output_type = st.selectbox(
         "What do you want to generate?",
@@ -2255,11 +2255,11 @@ def render_ba_workspace(user, selected_project):
         key="ba_context_input",
     )
 
-    uploaded_ba_file = st.file_uploader(
-        "Upload Requirement File (Optional)",
-        type=["txt", "md"],
-        key="ba_requirement_upload",
-    )
+   uploaded_file = st.file_uploader(
+    "Upload File (Optional)",
+    type=["pdf", "doc", "docx", "xls", "xlsx", "csv", "txt", "md", "png", "jpg", "jpeg"],
+    key="qa_screenshot_upload",
+)
 
     output_type = st.selectbox(
         "Choose Output",
@@ -2458,11 +2458,11 @@ def render_flow_workspace():
     st.markdown('<div class="clean-card">', unsafe_allow_html=True)
     st.subheader("Flow to Requirement")
 
-    uploaded_flow = st.file_uploader(
-        "Upload Flow Diagram",
-        type=["png", "jpg", "jpeg", "pdf"],
-        key="flow_diagram_upload",
-    )
+    uploaded_file = st.file_uploader(
+    "Upload File (Optional)",
+    type=["pdf", "doc", "docx", "xls", "xlsx", "csv", "txt", "md", "png", "jpg", "jpeg"],
+    key="qa_screenshot_upload",
+)
 
     if uploaded_flow is not None:
         reset_flow_output_if_new_file(uploaded_flow)
