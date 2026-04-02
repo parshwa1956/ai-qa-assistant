@@ -1782,7 +1782,6 @@ def render_single_jira(output_type: str, generated_title: str, description_text:
         else:
             st.error(f"Failed to create Jira issue: {message}")
 
-
 def render_current_output():
     if st.session_state.generated_type == "Smart Code Review" and st.session_state.smart_review_result:
     st.subheader("Generated Smart Code Review")
@@ -1792,16 +1791,16 @@ def render_current_output():
 
     render_code_review_results(st.session_state.smart_review_result)
 
-        json_text = json.dumps(st.session_state.smart_review_result, indent=2)
-        st.download_button(
-            label="Download Smart Code Review JSON",
-            data=json_text,
-            file_name=f"{st.session_state.generated_base_name}.json",
-            mime="application/json",
-            use_container_width=True,
-            key="download_smart_code_review_json",
-        )
-        return
+    json_text = json.dumps(st.session_state.smart_review_result, indent=2)
+    st.download_button(
+        label="Download Smart Code Review JSON",
+        data=json_text,
+        file_name=f"{st.session_state.generated_base_name}.json",
+        mime="application/json",
+        use_container_width=True,
+        key="download_smart_code_review_json",
+    )
+    return
 
     if st.session_state.generated_type and st.session_state.editable_output_df is not None:
         output_type = st.session_state.generated_type
