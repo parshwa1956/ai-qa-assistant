@@ -47,6 +47,10 @@ except Exception as e:
 # Load environment
 # ------------------------------
 load_dotenv()
+# ------------------------------
+# Load environment
+# ------------------------------
+load_dotenv()
 
 # ------------------------------
 # Page config
