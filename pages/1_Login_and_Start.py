@@ -89,6 +89,25 @@ def get_supabase() -> Client:
 supabase = get_supabase()
 
 
+# ------------------------------
+# Workspace constants
+# ------------------------------
+QA_WORKSPACE = "QA Workspace"
+BA_WORKSPACE = "BA Workspace"
+DEV_WORKSPACE = "Dev Workspace"
+FLOW_WORKSPACE = "Flow to Requirement"
+
+WORKSPACE_OUTPUT_KEYS = {
+    QA_WORKSPACE: "qa_output_state",
+    BA_WORKSPACE: "ba_output_state",
+    DEV_WORKSPACE: "dev_output_state",
+    FLOW_WORKSPACE: "flow_output_state",
+}
+
+
+# ------------------------------
+# Browser cookie helpers
+# ------------------------------
 def set_browser_cookie(name: str, value: str):
     safe_value = quote(value, safe="")
     components.html(
@@ -100,6 +119,7 @@ def set_browser_cookie(name: str, value: str):
         height=0,
         width=0,
     )
+
 
 
 def delete_browser_cookie(name: str):
@@ -262,237 +282,57 @@ div.stButton > button[kind="primary"]:hover {
 </style>
 """, unsafe_allow_html=True)
 
-# ------------------------------
-# Session state init
-# ------------------------------
-def init_session_state():
-    defaults = {
-        "user": None,
-        "access_token": None,
-        "refresh_token": None,
-        "selected_project_id": None,
-        "generated_type": None,
-        "generated_text": "",
-        "generated_df": None,
-        "generated_title": "",
-        "generated_base_name": "",
-        "generated_sheet_name": "",
-        "generated_mermaid_code": "",
-        "original_output_text": "",
-        "editable_output_text": "",
-        "original_output_df": None,
-        "editable_output_df": None,
-        "smart_review_result": None,
-        "flow_generated_text": "",
-        "flow_generated_title": "",
-        "flow_generated_df": None,
-        "flow_generated_base_name": "",
-        "flow_generated_mermaid_code": "",
-        "flow_uploaded_name": "",
-        "flow_original_output_text": "",
-        "flow_editable_output_text": "",
-        "flow_original_output_df": None,
-        "flow_editable_output_df": None,
-        "auth_checked": False,
-        "active_workspace": "QA Workspace",
-    }
-    for key, value in defaults.items():
-        if key not in st.session_state:
-            st.session_state[key] = value
-
-
-init_session_state()
-
-# ------------------------------
-# Copy / render helpers
-# ------------------------------
-def render_copy_button(text, button_label="Copy Output"):
-    safe_text = json.dumps(text)
-    components.html(
-        f"""
-        <button
-            onclick='navigator.clipboard.writeText({safe_text})'
-            style="
-                background:#2563eb;
-                color:white;
-                border:none;
-                border-radius:10px;
-                padding:10px 16px;
-                font-weight:600;
-                cursor:pointer;
-                width:100%;
-            "
-        >
-            {button_label}
-        </button>
-        """,
-        height=52,
-    )
-
-
-def build_mermaid_html_document(mermaid_code: str, title: str = "Diagram") -> str:
-    safe_title = title.replace("<", "&lt;").replace(">", "&gt;")
-    return f"""
-<!DOCTYPE html>
-<html>
-<head>
-    <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>{safe_title}</title>
-    <style>
-        body {{
-            margin: 0;
-            padding: 24px;
-            font-family: Arial, sans-serif;
-            background: #ffffff;
-        }}
-        .diagram-shell {{
-            border: 1px solid #e5e7eb;
-            border-radius: 14px;
-            padding: 16px;
-            background: #ffffff;
-            overflow: auto;
-        }}
-        .toolbar {{
-            margin-bottom: 12px;
-            display: flex;
-            gap: 8px;
-            flex-wrap: wrap;
-        }}
-        button {{
-            border: 1px solid #cbd5e1;
-            background: #f8fafc;
-            border-radius: 8px;
-            padding: 8px 12px;
-            cursor: pointer;
-            font-weight: 600;
-        }}
-    </style>
-</head>
-<body>
-    <div class="toolbar">
-        <button onclick="window.print()">Print / Save as PDF</button>
-        <button onclick="downloadSvg()">Download SVG</button>
-    </div>
-    <div class="diagram-shell">
-        <div id="diagram_container" class="mermaid">
-{mermaid_code}
-        </div>
-    </div>
-
-    <script type="module">
-        import mermaid from "https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.esm.min.mjs";
-        mermaid.initialize({{ startOnLoad: true, securityLevel: "loose" }});
-
-        window.downloadSvg = function() {{
-            const svg = document.querySelector("svg");
-            if (!svg) {{
-                alert("SVG not ready yet. Please wait a second and try again.");
-                return;
-            }}
-            const blob = new Blob([svg.outerHTML], {{ type: "image/svg+xml;charset=utf-8" }});
-            const url = URL.createObjectURL(blob);
-            const a = document.createElement("a");
-            a.href = url;
-            a.download = "{safe_filename(title)}.svg";
-            document.body.appendChild(a);
-            a.click();
-            document.body.removeChild(a);
-            URL.revokeObjectURL(url);
-        }};
-    </script>
-</body>
-</html>
-"""
-
-
-def render_mermaid_diagram(mermaid_code: str, key_suffix: str, height: int = 500):
-    if not mermaid_code.strip():
-        return
-
-    unique_id = f"mermaid_{safe_filename(key_suffix)}_{int(datetime.now().timestamp() * 1000)}"
-    html_content = f"""
-<!DOCTYPE html>
-<html>
-<head>
-    <meta charset="UTF-8" />
-    <style>
-        body {{
-            margin: 0;
-            padding: 12px;
-            background: white;
-            font-family: Arial, sans-serif;
-        }}
-        .wrap {{
-            border: 1px solid #e5e7eb;
-            border-radius: 14px;
-            padding: 12px;
-            background: #fafafa;
-            overflow: auto;
-        }}
-        .mermaid {{
-            text-align: center;
-        }}
-    </style>
-</head>
-<body>
-    <div class="wrap">
-        <div id="{unique_id}" class="mermaid">
-{mermaid_code}
-        </div>
-    </div>
-
-    <script type="module">
-      import mermaid from "https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.esm.min.mjs";
-      mermaid.initialize({{ startOnLoad: true, securityLevel: "loose" }});
-    </script>
-</body>
-</html>
-"""
-
-    components.html(
-        html_content,
-        height=height,
-        scrolling=True,
-    )
-
-
-def show_mermaid_download_buttons(mermaid_code: str, base_name: str, diagram_title: str):
-    if not mermaid_code.strip():
-        return
-
-    html_file = build_mermaid_html_document(mermaid_code, diagram_title)
-
-    d1, d2 = st.columns(2)
-    with d1:
-        st.download_button(
-            label="Download Mermaid Code (.mmd)",
-            data=mermaid_code,
-            file_name=f"{base_name}_diagram.mmd",
-            mime="text/plain",
-            use_container_width=True,
-            key=f"download_mermaid_code_{base_name}",
-        )
-    with d2:
-        st.download_button(
-            label="Download Diagram HTML",
-            data=html_file,
-            file_name=f"{base_name}_diagram.html",
-            mime="text/html",
-            use_container_width=True,
-            key=f"download_mermaid_html_{base_name}",
-        )
-
-    st.caption("Open the downloaded HTML file in your browser, then use Print / Save as PDF or Download SVG.")
-
 
 # ------------------------------
 # Utility helpers
 # ------------------------------
 def safe_filename(text):
+    text = "" if text is None else str(text)
     cleaned = "".join(c if c.isalnum() or c in (" ", "_", "-") else "" for c in text)
     cleaned = cleaned.strip().replace(" ", "_").lower()
     return cleaned if cleaned else "ai_output"
+
+
+
+def clean_text_for_storage(text):
+    if text is None:
+        return ""
+    if not isinstance(text, str):
+        text = str(text)
+
+    text = text.replace("\x00", "")
+
+    cleaned = []
+    for ch in text:
+        if ch in ("\n", "\r", "\t") or ord(ch) >= 32:
+            cleaned.append(ch)
+
+    return "".join(cleaned)
+
+
+
+def trim_text_for_prompt(text: str, max_chars: int = 15000) -> str:
+    text = clean_text_for_storage(text)
+    if not text:
+        return ""
+    text = text.strip()
+    if len(text) <= max_chars:
+        return text
+    return text[:max_chars] + "\n\n[Content truncated because uploaded file was too large.]"
+
+
+
+def now_iso():
+    return datetime.now(timezone.utc).isoformat()
+
+
+
+def parse_json_response(content):
+    content = content.strip()
+    if content.startswith("```"):
+        content = content.replace("```json", "").replace("```", "").strip()
+    return json.loads(content)
+
 
 
 def encode_uploaded_image(uploaded_file):
@@ -503,8 +343,23 @@ def encode_uploaded_image(uploaded_file):
     return f"data:{mime_type};base64,{encoded}"
 
 
+
+def read_uploaded_text_file(uploaded_file):
+    if uploaded_file is None:
+        return ""
+    try:
+        file_bytes = uploaded_file.read()
+        uploaded_file.seek(0)
+        text = file_bytes.decode("utf-8", errors="ignore")
+        return clean_text_for_storage(text)
+    except Exception:
+        return ""
+
+
+
 def convert_df_to_csv(df):
     return df.to_csv(index=False).encode("utf-8")
+
 
 
 def convert_df_to_excel(df, sheet_name="AI_Output"):
@@ -541,55 +396,6 @@ def convert_df_to_excel(df, sheet_name="AI_Output"):
     return output.getvalue()
 
 
-def parse_json_response(content):
-    content = content.strip()
-    if content.startswith("```"):
-        content = content.replace("```json", "").replace("```", "").strip()
-    return json.loads(content)
-
-
-def now_iso():
-    return datetime.now(timezone.utc).isoformat()
-
-
-def clean_text_for_storage(text):
-    if text is None:
-        return ""
-    if not isinstance(text, str):
-        text = str(text)
-
-    text = text.replace("\x00", "")
-
-    cleaned = []
-    for ch in text:
-        if ch in ("\n", "\r", "\t") or ord(ch) >= 32:
-            cleaned.append(ch)
-
-    return "".join(cleaned)
-
-
-def trim_text_for_prompt(text: str, max_chars: int = 15000) -> str:
-    text = clean_text_for_storage(text)
-    if not text:
-        return ""
-    text = text.strip()
-    if len(text) <= max_chars:
-        return text
-    return text[:max_chars] + "\n\n[Content truncated because uploaded file was too large.]"
-
-
-def read_uploaded_text_file(uploaded_file):
-    if uploaded_file is None:
-        return ""
-    try:
-        file_bytes = uploaded_file.read()
-        uploaded_file.seek(0)
-        text = file_bytes.decode("utf-8", errors="ignore")
-        return clean_text_for_storage(text)
-    except Exception:
-        return ""
-
-
 ALL_UPLOAD_FILE_TYPES = [
     "pdf", "doc", "docx", "xls", "xlsx", "csv", "txt", "md",
     "png", "jpg", "jpeg"
@@ -602,10 +408,313 @@ DEV_UPLOAD_FILE_TYPES = [
 
 
 # ------------------------------
+# Session state init
+# ------------------------------
+def build_empty_output_state():
+    return {
+        "generated_type": None,
+        "generated_text": "",
+        "generated_df": None,
+        "generated_title": "",
+        "generated_base_name": "",
+        "generated_sheet_name": "",
+        "generated_mermaid_code": "",
+        "original_output_text": "",
+        "editable_output_text": "",
+        "original_output_df": None,
+        "editable_output_df": None,
+        "smart_review_result": None,
+        "uploaded_name": "",
+    }
+
+
+
+def init_session_state():
+    defaults = {
+        "user": None,
+        "access_token": None,
+        "refresh_token": None,
+        "selected_project_id": None,
+        "auth_checked": False,
+        "active_workspace": QA_WORKSPACE,
+        WORKSPACE_OUTPUT_KEYS[QA_WORKSPACE]: build_empty_output_state(),
+        WORKSPACE_OUTPUT_KEYS[BA_WORKSPACE]: build_empty_output_state(),
+        WORKSPACE_OUTPUT_KEYS[DEV_WORKSPACE]: build_empty_output_state(),
+        WORKSPACE_OUTPUT_KEYS[FLOW_WORKSPACE]: build_empty_output_state(),
+    }
+    for key, value in defaults.items():
+        if key not in st.session_state:
+            st.session_state[key] = value.copy() if isinstance(value, dict) else value
+
+
+init_session_state()
+
+
+
+def get_workspace_state(workspace_name: str) -> dict:
+    key = WORKSPACE_OUTPUT_KEYS[workspace_name]
+    if key not in st.session_state:
+        st.session_state[key] = build_empty_output_state()
+    return st.session_state[key]
+
+
+
+def reset_workspace_state(workspace_name: str):
+    st.session_state[WORKSPACE_OUTPUT_KEYS[workspace_name]] = build_empty_output_state()
+
+
+
+def maybe_reset_workspace_for_new_upload(workspace_name: str, uploaded_file):
+    if uploaded_file is None:
+        return
+    state = get_workspace_state(workspace_name)
+    new_name = uploaded_file.name
+    old_name = state.get("uploaded_name", "")
+    if old_name and old_name != new_name:
+        reset_workspace_state(workspace_name)
+        state = get_workspace_state(workspace_name)
+    state["uploaded_name"] = new_name
+
+
+# ------------------------------
+# Copy / render helpers
+# ------------------------------
+def render_copy_button(text, button_label="Copy Output"):
+    safe_text = json.dumps(text)
+    components.html(
+        f"""
+        <button
+            onclick='navigator.clipboard.writeText({safe_text})'
+            style="
+                background:#2563eb;
+                color:white;
+                border:none;
+                border-radius:10px;
+                padding:10px 16px;
+                font-weight:600;
+                cursor:pointer;
+                width:100%;
+            "
+        >
+            {button_label}
+        </button>
+        """,
+        height=52,
+    )
+
+
+
+def render_mermaid_diagram_with_exports(mermaid_code: str, key_suffix: str, diagram_title: str, height: int = 620):
+    if not mermaid_code.strip():
+        return
+
+    unique_key = f"mermaid_{safe_filename(key_suffix)}_{int(datetime.now().timestamp() * 1000)}"
+    safe_title_js = json.dumps(diagram_title or "diagram")
+    safe_filename_js = json.dumps(f"{safe_filename(diagram_title or key_suffix)}")
+    safe_mermaid_js = json.dumps(mermaid_code)
+
+    html_content = f"""
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8" />
+    <style>
+        body {{
+            margin: 0;
+            padding: 12px;
+            background: white;
+            font-family: Arial, sans-serif;
+        }}
+        .panel {{
+            border: 1px solid #e5e7eb;
+            border-radius: 14px;
+            background: #ffffff;
+            overflow: hidden;
+        }}
+        .toolbar {{
+            display: flex;
+            gap: 8px;
+            padding: 12px;
+            border-bottom: 1px solid #e5e7eb;
+            background: #f8fafc;
+            flex-wrap: wrap;
+        }}
+        .toolbar button {{
+            border: 1px solid #cbd5e1;
+            background: white;
+            border-radius: 8px;
+            padding: 8px 12px;
+            cursor: pointer;
+            font-weight: 600;
+        }}
+        .toolbar button.primary {{
+            background: #2563eb;
+            border-color: #2563eb;
+            color: white;
+        }}
+        .canvas {{
+            padding: 16px;
+            background: #fafafa;
+            overflow: auto;
+            min-height: 420px;
+        }}
+        .canvas svg {{
+            max-width: 100%;
+            height: auto;
+            background: white;
+        }}
+        .status {{
+            padding: 0 16px 12px 16px;
+            color: #64748b;
+            font-size: 12px;
+        }}
+    </style>
+</head>
+<body>
+    <div class="panel">
+        <div class="toolbar">
+            <button class="primary" onclick="downloadPdf_{unique_key}()">Download PDF</button>
+            <button onclick="downloadSvg_{unique_key}()">Download SVG</button>
+            <button onclick="printDiagram_{unique_key}()">Print</button>
+        </div>
+        <div class="canvas">
+            <div id="diagram_{unique_key}"></div>
+        </div>
+        <div class="status" id="status_{unique_key}">Rendering diagram...</div>
+    </div>
+
+    <script src="https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/jspdf@2.5.1/dist/jspdf.umd.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/svg2pdf.js@2.5.0/dist/svg2pdf.umd.min.js"></script>
+    <script>
+        const mermaidCode_{unique_key} = {safe_mermaid_js};
+        const fileBase_{unique_key} = {safe_filename_js};
+        const title_{unique_key} = {safe_title_js};
+        const statusEl_{unique_key} = document.getElementById("status_{unique_key}");
+        const container_{unique_key} = document.getElementById("diagram_{unique_key}");
+
+        mermaid.initialize({{ startOnLoad: false, securityLevel: 'loose' }});
+
+        async function renderDiagram_{unique_key}() {{
+            try {{
+                const renderResult = await mermaid.render('svg_{unique_key}', mermaidCode_{unique_key});
+                container_{unique_key}.innerHTML = renderResult.svg;
+                statusEl_{unique_key}.textContent = 'Ready. You can download PDF or SVG.';
+            }} catch (err) {{
+                statusEl_{unique_key}.textContent = 'Failed to render diagram: ' + err;
+            }}
+        }}
+
+        function getSvg_{unique_key}() {{
+            return container_{unique_key}.querySelector('svg');
+        }}
+
+        window.downloadSvg_{unique_key} = function() {{
+            const svg = getSvg_{unique_key}();
+            if (!svg) {{
+                alert('Diagram is not ready yet.');
+                return;
+            }}
+            const blob = new Blob([svg.outerHTML], {{ type: 'image/svg+xml;charset=utf-8' }});
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = fileBase_{unique_key} + '.svg';
+            document.body.appendChild(a);
+            a.click();
+            a.remove();
+            URL.revokeObjectURL(url);
+        }};
+
+        window.downloadPdf_{unique_key} = async function() {{
+            const svg = getSvg_{unique_key}();
+            if (!svg) {{
+                alert('Diagram is not ready yet.');
+                return;
+            }}
+
+            try {{
+                const {{ jsPDF }} = window.jspdf;
+                const svgBox = svg.getBBox();
+                const margin = 20;
+                const pdfWidth = Math.max(svgBox.width + margin * 2, 595.28);
+                const pdfHeight = Math.max(svgBox.height + margin * 2 + 30, 841.89);
+                const pdf = new jsPDF({{
+                    orientation: pdfWidth > pdfHeight ? 'landscape' : 'portrait',
+                    unit: 'pt',
+                    format: [pdfWidth, pdfHeight],
+                }});
+
+                pdf.setFontSize(14);
+                pdf.text(title_{unique_key}, margin, 18);
+                await pdf.svg(svg, {{ x: margin, y: 30, width: svgBox.width, height: svgBox.height }});
+                pdf.save(fileBase_{unique_key} + '.pdf');
+            }} catch (err) {{
+                alert('PDF download failed: ' + err);
+            }}
+        }};
+
+        window.printDiagram_{unique_key} = function() {{
+            const svg = getSvg_{unique_key}();
+            if (!svg) {{
+                alert('Diagram is not ready yet.');
+                return;
+            }}
+            const printWindow = window.open('', '_blank');
+            printWindow.document.write(`
+                <html>
+                    <head>
+                        <title>${{title_{unique_key}}}</title>
+                        <style>
+                            body {{ font-family: Arial, sans-serif; padding: 20px; }}
+                            svg {{ max-width: 100%; height: auto; }}
+                        </style>
+                    </head>
+                    <body>
+                        <h2>${{title_{unique_key}}}</h2>
+                        ${{svg.outerHTML}}
+                    </body>
+                </html>
+            `);
+            printWindow.document.close();
+            printWindow.focus();
+            printWindow.print();
+        }};
+
+        renderDiagram_{unique_key}();
+    </script>
+</body>
+</html>
+"""
+
+    components.html(html_content, height=height, scrolling=True)
+
+
+
+def show_mermaid_download_buttons(mermaid_code: str, base_name: str, diagram_title: str):
+    if not mermaid_code.strip():
+        return
+
+    d1 = st.columns(1)[0]
+    with d1:
+        st.download_button(
+            label="Download Mermaid Code (.mmd)",
+            data=mermaid_code,
+            file_name=f"{base_name}_diagram.mmd",
+            mime="text/plain",
+            use_container_width=True,
+            key=f"download_mermaid_code_{base_name}",
+        )
+
+    st.caption("Use the diagram toolbar above to download PDF or SVG directly.")
+
+
+# ------------------------------
 # Auth helpers
 # ------------------------------
 def sign_up_user(email: str, password: str):
     return supabase.auth.sign_up({"email": email, "password": password})
+
 
 
 def sign_in_user(email: str, password: str):
@@ -615,6 +724,7 @@ def sign_in_user(email: str, password: str):
 PASSWORD_RESET_REDIRECT = get_secret_or_env("PASSWORD_RESET_REDIRECT", "http://localhost:8501")
 
 
+
 def send_password_reset_email(email: str):
     return supabase.auth.reset_password_for_email(
         email,
@@ -622,8 +732,10 @@ def send_password_reset_email(email: str):
     )
 
 
+
 def update_logged_in_user_password(new_password: str):
     return supabase.auth.update_user({"password": new_password})
+
 
 
 def auth_error_text(exc: Exception) -> str:
@@ -641,6 +753,7 @@ def auth_error_text(exc: Exception) -> str:
     return text
 
 
+
 def handle_login_success(auth_response):
     if getattr(auth_response, "user", None):
         st.session_state.user = auth_response.user
@@ -656,6 +769,7 @@ def handle_login_success(auth_response):
     st.rerun()
 
 
+
 def sign_out_user():
     try:
         supabase.auth.sign_out()
@@ -669,6 +783,7 @@ def sign_out_user():
         del st.session_state[key]
 
     init_session_state()
+
 
 
 def load_user_from_existing_session():
@@ -713,6 +828,7 @@ def upsert_profile(user):
     return supabase.table("profiles").upsert(payload).execute()
 
 
+
 def ensure_default_project(user_id: str):
     resp = (
         supabase.table("projects")
@@ -734,6 +850,7 @@ def ensure_default_project(user_id: str):
         ).execute()
 
 
+
 def create_project(user_id: str, name: str):
     return (
         supabase.table("projects")
@@ -749,6 +866,7 @@ def create_project(user_id: str, name: str):
     )
 
 
+
 def get_projects(user_id: str):
     return (
         supabase.table("projects")
@@ -759,6 +877,7 @@ def get_projects(user_id: str):
     )
 
 
+
 def rename_project(project_id: str, user_id: str, new_name: str):
     return (
         supabase.table("projects")
@@ -767,6 +886,7 @@ def rename_project(project_id: str, user_id: str, new_name: str):
         .eq("user_id", user_id)
         .execute()
     )
+
 
 
 def get_project_by_id(project_id: str, user_id: str):
@@ -780,6 +900,7 @@ def get_project_by_id(project_id: str, user_id: str):
     )
     rows = resp.data or []
     return rows[0] if rows else None
+
 
 
 def delete_project(project_id: str, user_id: str):
@@ -840,6 +961,7 @@ def save_item(
     return supabase.table("saved_items").insert(payload).execute()
 
 
+
 def get_project_items(user_id: str, project_id: str):
     resp = (
         supabase.table("saved_items")
@@ -850,6 +972,7 @@ def get_project_items(user_id: str, project_id: str):
         .execute()
     )
     return resp.data or []
+
 
 
 def get_jira_integration(user_id: str):
@@ -910,6 +1033,7 @@ def get_default_jira_issue_type(output_type):
     return mapping.get(output_type, "Task")
 
 
+
 def get_default_jira_labels(output_type):
     mapping = {
         "Bug Report": ["bug"],
@@ -928,6 +1052,7 @@ def get_default_jira_labels(output_type):
         "Technical Flow Diagram": ["technical-flow"],
     }
     return mapping.get(output_type, ["task"])
+
 
 
 def build_jira_description_doc(description_text):
@@ -951,6 +1076,7 @@ def build_jira_description_doc(description_text):
         ]
 
     return {"type": "doc", "version": 1, "content": content_blocks}
+
 
 
 def create_jira_issue(
@@ -1055,6 +1181,7 @@ Use this exact JSON structure:
     return pretty_text, df
 
 
+
 def generate_test_cases(title, context):
     prompt = f"""
 You are a senior QA engineer.
@@ -1112,6 +1239,7 @@ Type: {tc.get('Type', '')}
     df = pd.DataFrame(test_cases)
 
     return pretty_text, df
+
 
 
 def generate_test_scenarios(title, context):
@@ -1293,6 +1421,7 @@ Notes: {r.get('Notes', '')}"""
     return pretty, df
 
 
+
 def generate_story_ac_traceability_output(title, context, source_filename=""):
     prompt = f"""
 You are a senior business analyst.
@@ -1470,6 +1599,7 @@ Traceability References ({traceability_count}):
     return pretty_text, df
 
 
+
 def generate_dev_output(title, context, output_type):
     prompt_map = {
         "Technical Task Breakdown": f"""
@@ -1593,6 +1723,7 @@ Notes: {r.get('Notes', '')}"""
     return pretty, df
 
 
+
 def generate_flow_diagram_output(title, context, diagram_type):
     prompt = f"""
 You are a senior business systems analyst and solution architect.
@@ -1644,14 +1775,6 @@ Mermaid Code:
     df = pd.DataFrame(steps)
     return pretty_text, df, mermaid_code
 
-
-def reset_flow_output_if_new_file(uploaded_flow):
-    if uploaded_flow is None:
-        return
-
-    if st.session_state.flow_uploaded_name != uploaded_flow.name:
-        clear_flow_output_state()
-        st.session_state.flow_uploaded_name = uploaded_flow.name
 
 
 def generate_requirements_from_flow(uploaded_flow):
@@ -1775,41 +1898,10 @@ Test Data Needed:
 
     return pretty_text, df
 
-def show_download_buttons(df, pretty_text, base_name, sheet_name):
-    csv_data = convert_df_to_csv(df)
-    excel_data = convert_df_to_excel(df, sheet_name=sheet_name)
 
-    col1, col2, col3 = st.columns(3)
-
-    with col1:
-        st.download_button(
-            label="Download TXT",
-            data=pretty_text,
-            file_name=f"{base_name}.txt",
-            mime="text/plain",
-            use_container_width=True,
-        )
-
-    with col2:
-        st.download_button(
-            label="Download CSV",
-            data=csv_data,
-            file_name=f"{base_name}.csv",
-            mime="text/csv",
-            use_container_width=True,
-        )
-
-    with col3:
-        st.download_button(
-            label="Download Excel",
-            data=excel_data,
-            file_name=f"{base_name}.xlsx",
-            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-            use_container_width=True,
-        )
-
-
-
+# ------------------------------
+# Output helpers
+# ------------------------------
 def dataframe_to_pretty_text(df: pd.DataFrame, output_type: str, mermaid_code: str = "") -> str:
     working_df = df.copy()
 
@@ -1861,39 +1953,87 @@ Traceability Details:
     return body
 
 
-def set_current_output(output_type, title, result_text, df, base_name, sheet_name, mermaid_code=""):
-    editable_df = df.copy()
 
-    if output_type != "Bug Report" and "Select" not in editable_df.columns:
+def set_workspace_output(
+    workspace_name: str,
+    output_type: str,
+    title: str,
+    result_text: str,
+    df,
+    base_name: str,
+    sheet_name: str,
+    mermaid_code: str = "",
+):
+    state = get_workspace_state(workspace_name)
+    editable_df = df.copy() if isinstance(df, pd.DataFrame) else None
+
+    if isinstance(editable_df, pd.DataFrame) and output_type != "Bug Report" and "Select" not in editable_df.columns:
         editable_df.insert(0, "Select", False)
 
-    st.session_state.generated_type = output_type
-    st.session_state.generated_title = title
-    st.session_state.generated_text = result_text
-    st.session_state.generated_df = df
-    st.session_state.generated_base_name = base_name
-    st.session_state.generated_sheet_name = sheet_name
-    st.session_state.generated_mermaid_code = mermaid_code
-    st.session_state.original_output_text = result_text
-    st.session_state.editable_output_text = result_text
-    st.session_state.original_output_df = df.copy()
-    st.session_state.editable_output_df = editable_df
-    st.session_state.smart_review_result = None
+    state["generated_type"] = output_type
+    state["generated_title"] = title
+    state["generated_text"] = result_text
+    state["generated_df"] = df
+    state["generated_base_name"] = base_name
+    state["generated_sheet_name"] = sheet_name
+    state["generated_mermaid_code"] = mermaid_code
+    state["original_output_text"] = result_text
+    state["editable_output_text"] = result_text
+    state["original_output_df"] = df.copy() if isinstance(df, pd.DataFrame) else None
+    state["editable_output_df"] = editable_df
+    state["smart_review_result"] = None
 
 
-def set_smart_code_review_output(title: str, review_result: dict):
-    st.session_state.generated_type = "Smart Code Review"
-    st.session_state.generated_title = title
-    st.session_state.generated_text = json.dumps(review_result, indent=2)
-    st.session_state.generated_df = None
-    st.session_state.generated_base_name = f"{safe_filename(title)}_smart_code_review"
-    st.session_state.generated_sheet_name = "Smart_Code_Review"
-    st.session_state.generated_mermaid_code = ""
-    st.session_state.original_output_text = st.session_state.generated_text
-    st.session_state.editable_output_text = st.session_state.generated_text
-    st.session_state.original_output_df = None
-    st.session_state.editable_output_df = None
-    st.session_state.smart_review_result = review_result
+
+def set_smart_code_review_output(workspace_name: str, title: str, review_result: dict):
+    state = get_workspace_state(workspace_name)
+    state["generated_type"] = "Smart Code Review"
+    state["generated_title"] = title
+    state["generated_text"] = json.dumps(review_result, indent=2)
+    state["generated_df"] = None
+    state["generated_base_name"] = f"{safe_filename(title)}_smart_code_review"
+    state["generated_sheet_name"] = "Smart_Code_Review"
+    state["generated_mermaid_code"] = ""
+    state["original_output_text"] = state["generated_text"]
+    state["editable_output_text"] = state["generated_text"]
+    state["original_output_df"] = None
+    state["editable_output_df"] = None
+    state["smart_review_result"] = review_result
+
+
+
+def show_download_buttons(df, pretty_text, base_name, sheet_name):
+    csv_data = convert_df_to_csv(df)
+    excel_data = convert_df_to_excel(df, sheet_name=sheet_name)
+
+    col1, col2, col3 = st.columns(3)
+
+    with col1:
+        st.download_button(
+            label="Download TXT",
+            data=pretty_text,
+            file_name=f"{base_name}.txt",
+            mime="text/plain",
+            use_container_width=True,
+        )
+
+    with col2:
+        st.download_button(
+            label="Download CSV",
+            data=csv_data,
+            file_name=f"{base_name}.csv",
+            mime="text/csv",
+            use_container_width=True,
+        )
+
+    with col3:
+        st.download_button(
+            label="Download Excel",
+            data=excel_data,
+            file_name=f"{base_name}.xlsx",
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            use_container_width=True,
+        )
 
 
 
@@ -1928,6 +2068,7 @@ def build_row_summary(row_dict: dict, output_type: str, fallback_title: str) -> 
     return fallback_title
 
 
+
 def build_story_ac_traceability_description(row_dict: dict) -> str:
     return f"""User Story:
 Story Title: {row_dict.get('Story Title', '')}
@@ -1959,6 +2100,7 @@ Traceability Count:
 Traceability Details:
 {row_dict.get('Traceability Details', '')}
 """
+
 
 
 def render_row_level_jira(output_type: str, generated_title: str, edited_df: pd.DataFrame):
@@ -2031,6 +2173,7 @@ def render_row_level_jira(output_type: str, generated_title: str, edited_df: pd.
             st.error("Some Jira issues failed:\n\n" + "\n".join(failed_rows))
 
 
+
 def render_single_jira(output_type: str, generated_title: str, description_text: str):
     jira_config = get_jira_integration(st.session_state.user.id) if st.session_state.user else None
     st.markdown("### Create in Jira")
@@ -2076,49 +2219,52 @@ def render_single_jira(output_type: str, generated_title: str, description_text:
             st.error(f"Failed to create Jira issue: {message}")
 
 
-def render_current_output():
-    if st.session_state.generated_type == "Smart Code Review" and st.session_state.smart_review_result:
-        st.subheader("Generated Smart Code Review")
-        render_code_review_results(st.session_state.smart_review_result)
 
-        json_text = json.dumps(st.session_state.smart_review_result, indent=2)
+def render_workspace_output(workspace_name: str):
+    state = get_workspace_state(workspace_name)
+    generated_type = state["generated_type"]
+
+    if generated_type == "Smart Code Review" and state["smart_review_result"]:
+        st.subheader("Generated Smart Code Review")
+        render_code_review_results(state["smart_review_result"])
+
+        json_text = json.dumps(state["smart_review_result"], indent=2)
         st.download_button(
             label="Download Smart Code Review JSON",
             data=json_text,
-            file_name=f"{st.session_state.generated_base_name}.json",
+            file_name=f"{state['generated_base_name']}.json",
             mime="application/json",
             use_container_width=True,
-            key="download_smart_code_review_json",
+            key=f"download_smart_code_review_json_{workspace_name}",
         )
         return
 
-    if st.session_state.generated_type and st.session_state.editable_output_df is not None:
-        output_type = st.session_state.generated_type
-        generated_title = st.session_state.generated_title
-        base_name = st.session_state.generated_base_name
-        sheet_name = st.session_state.generated_sheet_name
-        mermaid_code = st.session_state.generated_mermaid_code
+    if generated_type and state["editable_output_df"] is not None:
+        generated_title = state["generated_title"]
+        base_name = state["generated_base_name"]
+        sheet_name = state["generated_sheet_name"]
+        mermaid_code = state["generated_mermaid_code"]
 
-        st.subheader(f"Generated {output_type}")
+        st.subheader(f"Generated {generated_type}")
 
         if mermaid_code:
             st.markdown("#### Diagram Preview")
-            render_mermaid_diagram(mermaid_code, output_type)
+            render_mermaid_diagram_with_exports(mermaid_code, workspace_name, generated_title)
             show_mermaid_download_buttons(mermaid_code, base_name, generated_title)
 
         edited_df = st.data_editor(
-            st.session_state.editable_output_df,
+            state["editable_output_df"],
             use_container_width=True,
             num_rows="dynamic",
-            key=f"editor_{output_type}",
+            key=f"editor_{workspace_name}_{generated_type}",
         )
-        st.session_state.editable_output_df = edited_df
+        state["editable_output_df"] = edited_df
 
         edited_text = st.text_area(
             "Edit Output",
-            value=st.session_state.editable_output_text,
+            value=state["editable_output_text"],
             height=320,
-            key="editable_output_box",
+            key=f"editable_output_box_{workspace_name}",
         )
 
         c1, c2, c3 = st.columns(3)
@@ -2127,86 +2273,35 @@ def render_current_output():
             render_copy_button(edited_text, "Copy Output")
 
         with c2:
-            if st.button("Update Output", use_container_width=True, key="update_output_btn"):
-                st.session_state.generated_text = edited_text
-                st.session_state.editable_output_text = edited_text
+            if st.button("Update Output", use_container_width=True, key=f"update_output_btn_{workspace_name}"):
+                state["generated_text"] = edited_text
+                state["editable_output_text"] = edited_text
                 st.success("Output updated successfully.")
 
         with c3:
-            if st.button("Reset Output", use_container_width=True, key="reset_output_btn"):
-                st.session_state.generated_text = st.session_state.original_output_text
-                st.session_state.editable_output_text = st.session_state.original_output_text
-                st.session_state.editable_output_df = st.session_state.original_output_df.copy()
+            if st.button("Reset Output", use_container_width=True, key=f"reset_output_btn_{workspace_name}"):
+                state["generated_text"] = state["original_output_text"]
+                state["editable_output_text"] = state["original_output_text"]
+                state["editable_output_df"] = state["original_output_df"].copy()
                 st.rerun()
 
         final_text_from_grid = dataframe_to_pretty_text(
-            st.session_state.editable_output_df,
-            output_type,
+            state["editable_output_df"],
+            generated_type,
             mermaid_code=mermaid_code,
         )
 
         show_download_buttons(
-            st.session_state.editable_output_df.drop(columns=["Select"], errors="ignore"),
+            state["editable_output_df"].drop(columns=["Select"], errors="ignore"),
             final_text_from_grid,
             base_name,
             sheet_name,
         )
 
-        if output_type == "Bug Report":
-            render_single_jira(output_type, generated_title, st.session_state.editable_output_text)
+        if generated_type == "Bug Report":
+            render_single_jira(generated_type, generated_title, edited_text)
         else:
-            render_row_level_jira(output_type, generated_title, st.session_state.editable_output_df)
-
-
-def render_flow_output():
-    if st.session_state.flow_generated_df is not None:
-        st.subheader("Generated Requirements")
-
-        edited_flow_df = st.data_editor(
-            st.session_state.flow_editable_output_df,
-            use_container_width=True,
-            num_rows="dynamic",
-            key="flow_data_editor",
-        )
-        st.session_state.flow_editable_output_df = edited_flow_df
-
-        edited_flow_text = st.text_area(
-            "Edit Output",
-            value=st.session_state.flow_editable_output_text,
-            height=320,
-            key="flow_editable_output_box",
-        )
-
-        c1, c2, c3 = st.columns(3)
-
-        with c1:
-            render_copy_button(edited_flow_text, "Copy Output")
-
-        with c2:
-            if st.button("Update Output", use_container_width=True, key="update_flow_output_btn"):
-                st.session_state.flow_generated_text = edited_flow_text
-                st.session_state.flow_editable_output_text = edited_flow_text
-                st.success("Flow output updated successfully.")
-
-        with c3:
-            if st.button("Reset Output", use_container_width=True, key="reset_flow_output_btn"):
-                st.session_state.flow_generated_text = st.session_state.flow_original_output_text
-                st.session_state.flow_editable_output_text = st.session_state.flow_original_output_text
-                st.session_state.flow_editable_output_df = st.session_state.flow_original_output_df.copy()
-                st.rerun()
-
-        flow_download_text = dataframe_to_pretty_text(
-            st.session_state.flow_editable_output_df,
-            "Flow Requirements",
-            mermaid_code=st.session_state.flow_generated_mermaid_code,
-        )
-
-        show_download_buttons(
-            st.session_state.flow_editable_output_df.drop(columns=["Select"], errors="ignore"),
-            flow_download_text,
-            st.session_state.flow_generated_base_name,
-            "Flow_Requirements",
-        )
+            render_row_level_jira(generated_type, generated_title, state["editable_output_df"])
 
 
 # ------------------------------
@@ -2399,59 +2494,37 @@ def render_workspace_header():
     """, unsafe_allow_html=True)
 
 
+
 def render_workspace_buttons():
     c1, c2, c3, c4 = st.columns(4)
     active = st.session_state.active_workspace
 
     with c1:
-        if st.button("QA Workspace", key="btn_qa_workspace", use_container_width=True, type="primary" if active == "QA Workspace" else "secondary"):
-            st.session_state.active_workspace = "QA Workspace"
+        if st.button("QA Workspace", key="btn_qa_workspace", use_container_width=True, type="primary" if active == QA_WORKSPACE else "secondary"):
+            st.session_state.active_workspace = QA_WORKSPACE
             st.rerun()
 
     with c2:
-        if st.button("BA Workspace", key="btn_ba_workspace", use_container_width=True, type="primary" if active == "BA Workspace" else "secondary"):
-            st.session_state.active_workspace = "BA Workspace"
+        if st.button("BA Workspace", key="btn_ba_workspace", use_container_width=True, type="primary" if active == BA_WORKSPACE else "secondary"):
+            st.session_state.active_workspace = BA_WORKSPACE
             st.rerun()
 
     with c3:
-        if st.button("Dev Workspace", key="btn_dev_workspace", use_container_width=True, type="primary" if active == "Dev Workspace" else "secondary"):
-            st.session_state.active_workspace = "Dev Workspace"
+        if st.button("Dev Workspace", key="btn_dev_workspace", use_container_width=True, type="primary" if active == DEV_WORKSPACE else "secondary"):
+            st.session_state.active_workspace = DEV_WORKSPACE
             st.rerun()
 
     with c4:
-        if st.button("Flow to Requirement", key="btn_flow_workspace", use_container_width=True, type="primary" if active == "Flow to Requirement" else "secondary"):
-            st.session_state.active_workspace = "Flow to Requirement"
+        if st.button("Flow to Requirement", key="btn_flow_workspace", use_container_width=True, type="primary" if active == FLOW_WORKSPACE else "secondary"):
+            st.session_state.active_workspace = FLOW_WORKSPACE
             st.rerun()
 
 
-def clear_generated_output_state():
-    st.session_state.generated_type = None
-    st.session_state.generated_title = ""
-    st.session_state.generated_text = ""
-    st.session_state.generated_df = None
-    st.session_state.generated_base_name = ""
-    st.session_state.generated_sheet_name = ""
-    st.session_state.generated_mermaid_code = ""
-    st.session_state.original_output_text = ""
-    st.session_state.editable_output_text = ""
-    st.session_state.original_output_df = None
-    st.session_state.editable_output_df = None
-    st.session_state.smart_review_result = None
-
-
-def clear_flow_output_state():
-    st.session_state.flow_generated_text = ""
-    st.session_state.flow_generated_title = ""
-    st.session_state.flow_generated_df = None
-    st.session_state.flow_generated_base_name = ""
-    st.session_state.flow_generated_mermaid_code = ""
-    st.session_state.flow_original_output_text = ""
-    st.session_state.flow_editable_output_text = ""
-    st.session_state.flow_original_output_df = None
-    st.session_state.flow_editable_output_df = None
-
 
 def render_qa_workspace(user, selected_project):
+    workspace_name = QA_WORKSPACE
+    state = get_workspace_state(workspace_name)
+
     st.markdown('<div class="clean-card">', unsafe_allow_html=True)
     st.subheader("QA Workspace")
 
@@ -2473,6 +2546,7 @@ def render_qa_workspace(user, selected_project):
         type=ALL_UPLOAD_FILE_TYPES,
         key="qa_file_upload",
     )
+    maybe_reset_workspace_for_new_upload(workspace_name, uploaded_file)
 
     output_type = st.selectbox(
         "What do you want to generate?",
@@ -2521,7 +2595,7 @@ def render_qa_workspace(user, selected_project):
                     sheet_name = "Test_Scenarios"
                     base_name = f"{safe_filename(title)}_test_scenarios"
 
-            set_current_output(output_type, title, result_text, df, base_name, sheet_name)
+            set_workspace_output(workspace_name, output_type, title, result_text, df, base_name, sheet_name)
 
             save_item(
                 user_id=user.id,
@@ -2541,16 +2615,20 @@ def render_qa_workspace(user, selected_project):
 
     st.markdown("</div>", unsafe_allow_html=True)
 
-    if st.session_state.generated_type:
+    if state["generated_type"]:
         st.markdown('<div class="result-card">', unsafe_allow_html=True)
-        render_current_output()
+        render_workspace_output(workspace_name)
         if st.button("Clear Current Output", use_container_width=True, key="clear_qa_output"):
-            clear_generated_output_state()
+            reset_workspace_state(workspace_name)
             st.rerun()
         st.markdown("</div>", unsafe_allow_html=True)
 
 
+
 def render_ba_workspace(user, selected_project):
+    workspace_name = BA_WORKSPACE
+    state = get_workspace_state(workspace_name)
+
     st.markdown('<div class="clean-card">', unsafe_allow_html=True)
     st.subheader("BA Workspace")
 
@@ -2572,6 +2650,7 @@ def render_ba_workspace(user, selected_project):
         type=ALL_UPLOAD_FILE_TYPES,
         key="ba_file_upload",
     )
+    maybe_reset_workspace_for_new_upload(workspace_name, uploaded_ba_file)
 
     output_type = st.selectbox(
         "Choose Output",
@@ -2621,7 +2700,8 @@ def render_ba_workspace(user, selected_project):
                     mermaid_code = ""
 
             base_name = f"{safe_filename(title)}_{safe_filename(output_type)}"
-            set_current_output(
+            set_workspace_output(
+                workspace_name,
                 output_type,
                 title,
                 result_text,
@@ -2648,23 +2728,20 @@ def render_ba_workspace(user, selected_project):
 
     st.markdown("</div>", unsafe_allow_html=True)
 
-    if st.session_state.generated_type in [
-        "Requirement to User Story",
-        "Acceptance Criteria Generator",
-        "User Story + Acceptance Criteria + Traceability",
-        "Business Requirement Breakdown",
-        "Business Process Flow",
-        "Data Flow Diagram",
-    ]:
+    if state["generated_type"]:
         st.markdown('<div class="result-card">', unsafe_allow_html=True)
-        render_current_output()
+        render_workspace_output(workspace_name)
         if st.button("Clear Current Output", use_container_width=True, key="clear_ba_output"):
-            clear_generated_output_state()
+            reset_workspace_state(workspace_name)
             st.rerun()
         st.markdown("</div>", unsafe_allow_html=True)
 
 
+
 def render_dev_workspace(user, selected_project):
+    workspace_name = DEV_WORKSPACE
+    state = get_workspace_state(workspace_name)
+
     st.markdown('<div class="clean-card">', unsafe_allow_html=True)
     st.subheader("Dev Workspace")
 
@@ -2686,6 +2763,7 @@ def render_dev_workspace(user, selected_project):
         type=DEV_UPLOAD_FILE_TYPES,
         key="dev_file_upload",
     )
+    maybe_reset_workspace_for_new_upload(workspace_name, uploaded_dev_file)
 
     language = st.selectbox(
         "Language",
@@ -2728,7 +2806,7 @@ def render_dev_workspace(user, selected_project):
                 if output_type == "Smart Code Review":
                     review_result = run_smart_code_review(full_context)
                     result_text = json.dumps(review_result, indent=2)
-                    set_smart_code_review_output(title, review_result)
+                    set_smart_code_review_output(workspace_name, title, review_result)
                     save_item(
                         user_id=user.id,
                         project_id=selected_project["id"],
@@ -2741,7 +2819,8 @@ def render_dev_workspace(user, selected_project):
                 elif output_type == "Technical Flow Diagram":
                     result_text, df, mermaid_code = generate_flow_diagram_output(title, full_context, output_type)
                     base_name = f"{safe_filename(title)}_{safe_filename(output_type)}"
-                    set_current_output(
+                    set_workspace_output(
+                        workspace_name,
                         output_type,
                         title,
                         result_text,
@@ -2762,7 +2841,8 @@ def render_dev_workspace(user, selected_project):
                 else:
                     result_text, df = generate_dev_output(title, full_context, output_type)
                     base_name = f"{safe_filename(title)}_{safe_filename(output_type)}"
-                    set_current_output(
+                    set_workspace_output(
+                        workspace_name,
                         output_type,
                         title,
                         result_text,
@@ -2788,21 +2868,20 @@ def render_dev_workspace(user, selected_project):
 
     st.markdown("</div>", unsafe_allow_html=True)
 
-    if st.session_state.generated_type in [
-        "Technical Task Breakdown",
-        "API / Backend Tasks",
-        "Developer Checklist",
-        "Smart Code Review",
-        "Technical Flow Diagram",
-    ]:
+    if state["generated_type"]:
         st.markdown('<div class="result-card">', unsafe_allow_html=True)
-        render_current_output()
+        render_workspace_output(workspace_name)
         if st.button("Clear Current Output", use_container_width=True, key="clear_dev_output"):
-            clear_generated_output_state()
+            reset_workspace_state(workspace_name)
             st.rerun()
         st.markdown("</div>", unsafe_allow_html=True)
 
+
+
 def render_flow_workspace():
+    workspace_name = FLOW_WORKSPACE
+    state = get_workspace_state(workspace_name)
+
     st.markdown('<div class="clean-card">', unsafe_allow_html=True)
     st.subheader("Flow to Requirement")
 
@@ -2811,10 +2890,9 @@ def render_flow_workspace():
         type=ALL_UPLOAD_FILE_TYPES,
         key="flow_file_upload",
     )
+    maybe_reset_workspace_for_new_upload(workspace_name, uploaded_flow)
 
     if uploaded_flow is not None:
-        reset_flow_output_if_new_file(uploaded_flow)
-
         if uploaded_flow.type in ["image/png", "image/jpg", "image/jpeg"]:
             st.image(uploaded_flow, caption="Uploaded Flow Diagram", use_container_width=True)
         elif uploaded_flow.type == "application/pdf":
@@ -2838,19 +2916,17 @@ def render_flow_workspace():
             with st.spinner("Generating requirements from flow..."):
                 result_text, df_flow = generate_requirements_from_flow(uploaded_flow)
 
-            flow_edit_df = df_flow.copy()
-            if "Select" not in flow_edit_df.columns:
-                flow_edit_df.insert(0, "Select", False)
-
-            st.session_state.flow_generated_title = flow_title
-            st.session_state.flow_generated_text = result_text
-            st.session_state.flow_generated_df = df_flow
-            st.session_state.flow_generated_base_name = f"{safe_filename(flow_title)}_requirements"
-            st.session_state.flow_generated_mermaid_code = ""
-            st.session_state.flow_original_output_text = result_text
-            st.session_state.flow_editable_output_text = result_text
-            st.session_state.flow_original_output_df = df_flow.copy()
-            st.session_state.flow_editable_output_df = flow_edit_df
+            base_name = f"{safe_filename(flow_title)}_requirements"
+            set_workspace_output(
+                workspace_name,
+                "Flow Requirements",
+                flow_title,
+                result_text,
+                df_flow,
+                base_name,
+                "Flow_Requirements",
+                mermaid_code="",
+            )
 
             st.success("Requirements generated successfully.")
 
@@ -2859,15 +2935,15 @@ def render_flow_workspace():
 
     st.markdown("</div>", unsafe_allow_html=True)
 
-    if st.session_state.flow_generated_df is not None:
+    if state["generated_type"]:
         st.markdown('<div class="result-card">', unsafe_allow_html=True)
-        render_flow_output()
-
+        render_workspace_output(workspace_name)
         if st.button("Clear Flow Output", use_container_width=True, key="clear_flow_output"):
-            clear_flow_output_state()
+            reset_workspace_state(workspace_name)
             st.rerun()
-
         st.markdown("</div>", unsafe_allow_html=True)
+
+
 
 def render_main_app():
     user = st.session_state.user
@@ -2884,36 +2960,4 @@ def render_main_app():
     render_workspace_header()
     render_workspace_buttons()
 
-    workspace = st.session_state.active_workspace
-
-    if workspace == "QA Workspace":
-        render_qa_workspace(user, selected_project)
-    elif workspace == "BA Workspace":
-        render_ba_workspace(user, selected_project)
-    elif workspace == "Dev Workspace":
-        render_dev_workspace(user, selected_project)
-    elif workspace == "Flow to Requirement":
-        render_flow_workspace()
-
-
-# ------------------------------
-# Boot existing auth session once
-# ------------------------------
-if not st.session_state.auth_checked:
-    load_user_from_existing_session()
-    st.session_state.auth_checked = True
-
-
-# ------------------------------
-# Handle logout from header link
-# ------------------------------
-if st.query_params.get("do_logout") == "1":
-    sign_out_user()
-    st.query_params.clear()
-    st.rerun()
-
-
-# ------------------------------
-# Run app
-# ------------------------------
-render_main_app()
+    workspace = st.session_s
