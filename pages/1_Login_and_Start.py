@@ -788,8 +788,17 @@ def sign_out_user():
 
 def load_user_from_existing_session():
     try:
-        access_token = st.context.cookies.get("sb_access_token")
-        refresh_token = st.context.cookies.get("sb_refresh_token")
+        access_token = None
+        refresh_token = None
+
+        try:
+            cookie_context = getattr(st, "context", None)
+            if cookie_context and getattr(cookie_context, "cookies", None):
+                access_token = cookie_context.cookies.get("sb_access_token")
+                refresh_token = cookie_context.cookies.get("sb_refresh_token")
+        except Exception:
+            access_token = None
+            refresh_token = None
 
         if access_token:
             access_token = unquote(access_token)
@@ -797,7 +806,10 @@ def load_user_from_existing_session():
             refresh_token = unquote(refresh_token)
 
         if access_token and refresh_token:
-            session_response = supabase.auth.set_session(access_token, refresh_token)
+            try:
+                session_response = supabase.auth.set_session(access_token, refresh_token)
+            except Exception:
+                session_response = None
 
             if session_response and getattr(session_response, "user", None):
                 st.session_state.user = session_response.user
@@ -807,7 +819,11 @@ def load_user_from_existing_session():
                 st.session_state.refresh_token = session_response.session.refresh_token
                 return
 
-        session = supabase.auth.get_session()
+        try:
+            session = supabase.auth.get_session()
+        except Exception:
+            session = None
+
         if session and getattr(session, "session", None):
             current_session = session.session
             if current_session and current_session.user:
@@ -815,7 +831,9 @@ def load_user_from_existing_session():
                 st.session_state.access_token = current_session.access_token
                 st.session_state.refresh_token = current_session.refresh_token
     except Exception:
-        pass
+        st.session_state.user = None
+        st.session_state.access_token = None
+        st.session_state.refresh_token = None
 
 
 # ------------------------------
@@ -2960,4 +2978,41 @@ def render_main_app():
     render_workspace_header()
     render_workspace_buttons()
 
-    workspace = st.session_s
+    workspace = st.session_state.active_workspace
+
+    if workspace == QA_WORKSPACE:
+        render_qa_workspace(user, selected_project)
+    elif workspace == BA_WORKSPACE:
+        render_ba_workspace(user, selected_project)
+    elif workspace == DEV_WORKSPACE:
+        render_dev_workspace(user, selected_project)
+    elif workspace == FLOW_WORKSPACE:
+        render_flow_workspace()
+
+
+# ------------------------------
+# Boot existing auth session once
+# ------------------------------
+if not st.session_state.auth_checked:
+    load_user_from_existing_session()
+    st.session_state.auth_checked = True
+
+
+# ------------------------------
+# Handle logout from header link
+# ------------------------------
+if st.query_params.get("do_logout") == "1":
+    sign_out_user()
+    st.query_params.clear()
+    st.rerun()
+
+
+# ------------------------------
+# Run app
+# ------------------------------
+try:
+    render_main_app()
+except Exception as e:
+    st.error(f"App failed to load: {e}")
+    with st.expander("Show technical details"):
+        st.exception(e)
