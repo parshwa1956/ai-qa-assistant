@@ -593,7 +593,13 @@ def render_mermaid_diagram_with_exports(mermaid_code: str, key_suffix: str, diag
         const statusEl_{unique_key} = document.getElementById("status_{unique_key}");
         const container_{unique_key} = document.getElementById("diagram_{unique_key}");
 
-        mermaid.initialize({{ startOnLoad: false, securityLevel: 'loose' }});
+        mermaid.initialize({{
+            startOnLoad: false,
+            securityLevel: 'loose',
+            theme: 'default',
+            fontFamily: 'Arial, Helvetica, sans-serif',
+            flowchart: {{ htmlLabels: false, useMaxWidth: true }},
+        }});
 
         async function renderDiagram_{unique_key}() {{
             try {{
@@ -609,8 +615,29 @@ def render_mermaid_diagram_with_exports(mermaid_code: str, key_suffix: str, diag
             return container_{unique_key}.querySelector('svg');
         }}
 
-        window.downloadSvg_{unique_key} = function() {{
+        function buildExportSvg_{unique_key}() {{
             const svg = getSvg_{unique_key}();
+            if (!svg) return null;
+
+            const clone = svg.cloneNode(true);
+            clone.setAttribute('xmlns', 'http://www.w3.org/2000/svg');
+            clone.setAttribute('xmlns:xlink', 'http://www.w3.org/1999/xlink');
+
+            if (!clone.getAttribute('width') || !clone.getAttribute('height')) {{
+                const viewBox = clone.viewBox && clone.viewBox.baseVal
+                    ? clone.viewBox.baseVal
+                    : null;
+                if (viewBox && viewBox.width && viewBox.height) {{
+                    clone.setAttribute('width', viewBox.width);
+                    clone.setAttribute('height', viewBox.height);
+                }}
+            }}
+
+            return clone;
+        }}
+
+        window.downloadSvg_{unique_key} = function() {{
+            const svg = buildExportSvg_{unique_key}();
             if (!svg) {{
                 alert('Diagram is not ready yet.');
                 return;
@@ -627,7 +654,7 @@ def render_mermaid_diagram_with_exports(mermaid_code: str, key_suffix: str, diag
         }};
 
         window.downloadPdf_{unique_key} = async function() {{
-            const svg = getSvg_{unique_key}();
+            const svg = buildExportSvg_{unique_key}();
             if (!svg) {{
                 alert('Diagram is not ready yet.');
                 return;
@@ -635,19 +662,22 @@ def render_mermaid_diagram_with_exports(mermaid_code: str, key_suffix: str, diag
 
             try {{
                 const {{ jsPDF }} = window.jspdf;
-                const svgBox = svg.getBBox();
+                const width = Number(svg.getAttribute('width')) || svg.viewBox.baseVal.width || 1200;
+                const height = Number(svg.getAttribute('height')) || svg.viewBox.baseVal.height || 800;
                 const margin = 20;
-                const pdfWidth = Math.max(svgBox.width + margin * 2, 595.28);
-                const pdfHeight = Math.max(svgBox.height + margin * 2 + 30, 841.89);
+                const titleSpace = 24;
+                const pdfWidth = Math.max(width + margin * 2, 595.28);
+                const pdfHeight = Math.max(height + margin * 2 + titleSpace, 841.89);
                 const pdf = new jsPDF({{
                     orientation: pdfWidth > pdfHeight ? 'landscape' : 'portrait',
                     unit: 'pt',
                     format: [pdfWidth, pdfHeight],
                 }});
 
+                pdf.setFont('helvetica', 'normal');
                 pdf.setFontSize(14);
                 pdf.text(title_{unique_key}, margin, 18);
-                await pdf.svg(svg, {{ x: margin, y: 30, width: svgBox.width, height: svgBox.height }});
+                await pdf.svg(svg, {{ x: margin, y: 30, width: width, height: height }});
                 pdf.save(fileBase_{unique_key} + '.pdf');
             }} catch (err) {{
                 alert('PDF download failed: ' + err);
