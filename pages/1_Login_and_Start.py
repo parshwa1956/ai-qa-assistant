@@ -1,7 +1,9 @@
 import os
+import re
 import json
 import base64
 from io import BytesIO
+from html import unescape
 from datetime import datetime, timezone
 from urllib.parse import quote, unquote
 
@@ -14,6 +16,16 @@ from dotenv import load_dotenv
 from supabase import create_client, Client
 from openpyxl.styles import Font, Alignment, PatternFill
 from openpyxl.utils import get_column_letter
+
+RICH_EDITOR_IMPORT_ERROR = None
+
+try:
+    from streamlit_quill import st_quill
+    RICH_EDITOR_AVAILABLE = True
+except Exception as e:
+    RICH_EDITOR_AVAILABLE = False
+    RICH_EDITOR_IMPORT_ERROR = str(e)
+    st_quill = None
 
 SMART_REVIEW_IMPORT_ERROR = None
 
@@ -394,6 +406,125 @@ def convert_df_to_excel(df, sheet_name="AI_Output"):
         worksheet.freeze_panes = "A2"
 
     return output.getvalue()
+
+
+
+def html_to_prompt_text(html_value: str) -> str:
+    if not html_value:
+        return ""
+    text_value = html_value
+    text_value = re.sub(r"<br\s*/?>", "\n", text_value, flags=re.IGNORECASE)
+    text_value = re.sub(r"</p\s*>", "\n", text_value, flags=re.IGNORECASE)
+    text_value = re.sub(r"</div\s*>", "\n", text_value, flags=re.IGNORECASE)
+    text_value = re.sub(r"<li\s*>", "- ", text_value, flags=re.IGNORECASE)
+    text_value = re.sub(r"<[^>]+>", "", text_value)
+    text_value = unescape(text_value)
+    text_value = clean_text_for_storage(text_value)
+    lines = [line.rstrip() for line in text_value.splitlines()]
+    return "\n".join(lines).strip()
+
+
+def extract_embedded_images_from_html(html_value: str):
+    if not html_value:
+        return []
+    matches = re.findall(r'<img[^>]+src=["\'](data:image/[^"\']+)["\']', html_value, flags=re.IGNORECASE)
+    return matches or []
+
+
+def describe_images_for_prompt(image_data_urls, purpose: str = "") -> str:
+    if not image_data_urls:
+        return ""
+
+    content = [
+        {
+            "type": "text",
+            "text": (
+                "You are analyzing screenshots embedded in a user requirement editor. "
+                "Summarize only the important UI, text, states, validations, errors, tables, labels, "
+                "or business clues visible in these screenshots. Keep the summary concise but useful "
+                "for generating QA, BA, or DEV outputs.\n\n"
+                f"Purpose: {purpose or 'General requirement analysis'}"
+            ),
+        }
+    ]
+
+    for item in image_data_urls[:5]:
+        content.append({"type": "image_url", "image_url": {"url": item}})
+
+    response = client.chat.completions.create(
+        model="gpt-4o-mini",
+        messages=[{"role": "user", "content": content}],
+    )
+    return clean_text_for_storage(response.choices[0].message.content).strip()
+
+
+def render_rich_requirement_editor(label: str, key_prefix: str, placeholder: str = "", height: int = 220):
+    html_key = f"{key_prefix}_html"
+    text_key = f"{key_prefix}_text"
+
+    if RICH_EDITOR_AVAILABLE:
+        st.markdown(label)
+        html_value = st_quill(
+            value=st.session_state.get(html_key, ""),
+            html=True,
+            toolbar=[
+                ["bold", "italic", "underline", "strike"],
+                [{"header": [1, 2, 3, False]}],
+                [{"list": "ordered"}, {"list": "bullet"}],
+                [{"indent": "-1"}, {"indent": "+1"}],
+                [{"color": []}, {"background": []}],
+                ["blockquote", "code-block"],
+                ["link", "image"],
+                ["clean"],
+            ],
+            placeholder=placeholder,
+            key=html_key,
+        )
+        html_value = html_value or ""
+        plain_text = html_to_prompt_text(html_value)
+        st.session_state[text_key] = plain_text
+        return plain_text, html_value
+
+    text_value = st.text_area(
+        label,
+        height=height,
+        placeholder=placeholder,
+        key=text_key,
+    )
+    return text_value, ""
+
+
+def build_combined_context(text_context: str, rich_html: str = "", uploaded_file=None, purpose: str = ""):
+    full_context = clean_text_for_storage(text_context).strip()
+
+    uploaded_text = read_uploaded_text_file(uploaded_file)
+    trimmed_uploaded_text = trim_text_for_prompt(uploaded_text, 15000)
+
+    if trimmed_uploaded_text.strip():
+        if full_context:
+            full_context = f"{full_context}\n\nUploaded File Content:\n{trimmed_uploaded_text}"
+        else:
+            full_context = trimmed_uploaded_text
+
+    image_data_urls = extract_embedded_images_from_html(rich_html)
+
+    if uploaded_file and getattr(uploaded_file, "type", "") in ["image/png", "image/jpg", "image/jpeg"]:
+        try:
+            image_data_urls.append(encode_uploaded_image(uploaded_file))
+        except Exception:
+            pass
+
+    image_data_urls = list(dict.fromkeys(image_data_urls))
+
+    if image_data_urls:
+        visual_notes = describe_images_for_prompt(image_data_urls, purpose=purpose)
+        if visual_notes:
+            if full_context:
+                full_context = f"{full_context}\n\nScreenshot / Visual Notes:\n{visual_notes}"
+            else:
+                full_context = f"Screenshot / Visual Notes:\n{visual_notes}"
+
+    return full_context, uploaded_text
 
 
 ALL_UPLOAD_FILE_TYPES = [
@@ -2582,11 +2713,11 @@ def render_qa_workspace(user, selected_project):
         key="qa_title_input",
     )
 
-    context = st.text_area(
+    context, qa_rich_html = render_rich_requirement_editor(
         "Requirement Details",
+        key_prefix="qa_context_input",
         height=160,
         placeholder="Paste bug details, requirement details, acceptance criteria, or observations here...",
-        key="qa_context_input",
     )
 
     uploaded_file = st.file_uploader(
@@ -2602,14 +2733,12 @@ def render_qa_workspace(user, selected_project):
         key="qa_output_type_select",
     )
 
-    uploaded_text = read_uploaded_text_file(uploaded_file)
-    full_context = context.strip()
-
-    if uploaded_text.strip():
-        if full_context:
-            full_context = f"{full_context}\n\nUploaded File Content:\n{uploaded_text}"
-        else:
-            full_context = uploaded_text
+    full_context, uploaded_text = build_combined_context(
+        context,
+        rich_html=qa_rich_html,
+        uploaded_file=uploaded_file,
+        purpose="Generate QA output from requirement details, embedded screenshots, and uploaded support files.",
+    )
 
     is_form_valid = bool(title.strip()) and bool(full_context.strip())
 
@@ -2686,11 +2815,11 @@ def render_ba_workspace(user, selected_project):
         key="ba_title_input",
     )
 
-    context = st.text_area(
+    context, ba_rich_html = render_rich_requirement_editor(
         "Business Requirement Details",
+        key_prefix="ba_context_input",
         height=180,
         placeholder="Paste the requirement, business rules, and expected behavior here...",
-        key="ba_context_input",
     )
 
     uploaded_ba_file = st.file_uploader(
@@ -2713,15 +2842,12 @@ def render_ba_workspace(user, selected_project):
         key="ba_output_select",
     )
 
-    uploaded_text = read_uploaded_text_file(uploaded_ba_file)
-    trimmed_uploaded_text = trim_text_for_prompt(uploaded_text, 15000)
-    full_context = clean_text_for_storage(context).strip()
-
-    if trimmed_uploaded_text.strip():
-        if full_context:
-            full_context = f"{full_context}\n\nUploaded File Content:\n{trimmed_uploaded_text}"
-        else:
-            full_context = trimmed_uploaded_text
+    full_context, uploaded_text = build_combined_context(
+        context,
+        rich_html=ba_rich_html,
+        uploaded_file=uploaded_ba_file,
+        purpose="Generate BA output from requirement text, embedded screenshots, and uploaded files.",
+    )
 
     if uploaded_text and len(uploaded_text) > 15000:
         st.warning("Uploaded file is large, so only the first portion was used for generation.")
@@ -2799,11 +2925,11 @@ def render_dev_workspace(user, selected_project):
         key="dev_title_input",
     )
 
-    context = st.text_area(
+    context, dev_rich_html = render_rich_requirement_editor(
         "Technical Context / Code",
+        key_prefix="dev_context_input",
         height=220,
         placeholder="Paste the user story, business rules, API notes, or code here...",
-        key="dev_context_input",
     )
 
     uploaded_dev_file = st.file_uploader(
@@ -2831,14 +2957,12 @@ def render_dev_workspace(user, selected_project):
         key="dev_output_select",
     )
 
-    uploaded_code_text = read_uploaded_text_file(uploaded_dev_file)
-    full_context = context.strip()
-
-    if uploaded_code_text.strip():
-        if full_context:
-            full_context = f"{full_context}\n\nUploaded File Content:\n{uploaded_code_text}"
-        else:
-            full_context = uploaded_code_text
+    full_context, uploaded_code_text = build_combined_context(
+        context,
+        rich_html=dev_rich_html,
+        uploaded_file=uploaded_dev_file,
+        purpose="Generate DEV output from technical text, embedded screenshots, code, and uploaded files.",
+    )
 
     if language and language != "Auto / General":
         full_context = f"Language: {language}\n\n{full_context}"
