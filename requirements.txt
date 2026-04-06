@@ -5,3 +5,4 @@ openai
 python-dotenv
 openpyxl
 supabase
+streamlit-quill==0.0.3
