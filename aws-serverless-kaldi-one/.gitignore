@@ -1,0 +1,11 @@
+node_modules/
+dist/
+.env.local
+.env.production
+.deploy.env
+backend/build/
+backend/.venv/
+__pycache__/
+*.pyc
+infra/parameters.json
+.DS_Store

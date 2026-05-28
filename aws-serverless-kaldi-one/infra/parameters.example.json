@@ -1,0 +1,50 @@
+[
+  {
+    "ParameterKey": "AppName",
+    "ParameterValue": "kaldi-one"
+  },
+  {
+    "ParameterKey": "Environment",
+    "ParameterValue": "prod"
+  },
+  {
+    "ParameterKey": "DomainName",
+    "ParameterValue": "app.example.com"
+  },
+  {
+    "ParameterKey": "HostedZoneId",
+    "ParameterValue": "Z1234567890ABC"
+  },
+  {
+    "ParameterKey": "CertificateArn",
+    "ParameterValue": "arn:aws:acm:us-east-1:123456789012:certificate/xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"
+  },
+  {
+    "ParameterKey": "OpenAISecretArn",
+    "ParameterValue": "arn:aws:secretsmanager:us-east-1:123456789012:secret:kaldi-one/openai-AbCdEf"
+  },
+  {
+    "ParameterKey": "OpenAIParameterName",
+    "ParameterValue": ""
+  },
+  {
+    "ParameterKey": "AllowedOrigins",
+    "ParameterValue": "https://app.example.com"
+  },
+  {
+    "ParameterKey": "PriceClass",
+    "ParameterValue": "PriceClass_100"
+  },
+  {
+    "ParameterKey": "LogRetentionDays",
+    "ParameterValue": "14"
+  },
+  {
+    "ParameterKey": "LambdaArtifactBucket",
+    "ParameterValue": "kaldi-one-deploy-artifacts-123456789012"
+  },
+  {
+    "ParameterKey": "LambdaArtifactKey",
+    "ParameterValue": "backend/lambda.zip"
+  }
+]
