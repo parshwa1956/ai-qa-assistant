@@ -3,7 +3,6 @@ import { useRouter } from 'vue-router'
 import { useAuthStore } from '@/stores/auth'
 import SidebarNav from './SidebarNav.vue'
 import MobileNav from './MobileNav.vue'
-import ToastNotification from './ToastNotification.vue'
 import ProjectSelector from './ProjectSelector.vue'
 
 const auth = useAuthStore()
@@ -33,6 +32,5 @@ async function logout() {
       </main>
     </div>
     <MobileNav />
-    <ToastNotification />
   </div>
 </template>

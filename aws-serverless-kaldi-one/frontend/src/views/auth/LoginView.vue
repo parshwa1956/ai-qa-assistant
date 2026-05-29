@@ -16,6 +16,12 @@ async function submit() {
     await auth.login(email.value, password.value)
     router.push('/app/workspace')
   } catch (e) {
+    const code = (e as { code?: string })?.code
+    if (code === 'UserNotConfirmedException') {
+      toast.push('Confirm your email first, or ask an admin to confirm your account.', 'error')
+      router.push({ path: '/auth/confirm', query: { email: email.value } })
+      return
+    }
     toast.push((e as Error).message || 'Login failed', 'error')
   }
 }
@@ -34,6 +40,8 @@ async function submit() {
       </form>
       <p class="mt-4 text-center text-sm">
         <router-link to="/auth/forgot" class="text-accent hover:underline">Forgot password?</router-link>
+        ·
+        <router-link to="/auth/confirm" class="text-accent hover:underline">Confirm email</router-link>
       </p>
       <p class="mt-2 text-center text-sm text-muted-light dark:text-muted-dark">
         No account? <router-link to="/auth/register" class="text-accent hover:underline">Sign up</router-link>

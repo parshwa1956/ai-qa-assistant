@@ -24,7 +24,7 @@ export const useAuthStore = defineStore('auth', () => {
   async function register(e: string, password: string) {
     loading.value = true
     try {
-      await cognito.signUp(e, password)
+      return await cognito.signUp(e, password)
     } finally {
       loading.value = false
     }

@@ -8,6 +8,7 @@ const router = createRouter({
     { path: '/auth/login', name: 'login', component: () => import('@/views/auth/LoginView.vue'), meta: { guest: true } },
     { path: '/auth/register', name: 'register', component: () => import('@/views/auth/RegisterView.vue'), meta: { guest: true } },
     { path: '/auth/forgot', name: 'forgot', component: () => import('@/views/auth/ForgotPasswordView.vue'), meta: { guest: true } },
+    { path: '/auth/confirm', name: 'confirm', component: () => import('@/views/auth/ConfirmEmailView.vue'), meta: { guest: true } },
     {
       path: '/app',
       redirect: '/app/workspace',

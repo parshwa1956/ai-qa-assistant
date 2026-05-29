@@ -10,13 +10,36 @@ const auth = useAuthStore()
 const toast = useToastStore()
 const router = useRouter()
 
+function signUpErrorMessage(err: unknown): string {
+  const code = (err as { code?: string })?.code
+  const msg = (err as Error)?.message || ''
+  if (code === 'UsernameExistsException' || /already exists/i.test(msg)) {
+    return 'An account with this email already exists. Sign in or use Forgot password.'
+  }
+  if (code === 'InvalidPasswordException') {
+    return 'Password does not meet requirements (min 8 chars, upper, lower, number).'
+  }
+  return msg || 'Sign up failed'
+}
+
 async function submit() {
   try {
-    await auth.register(email.value, password.value)
-    toast.push('Account created. Please sign in.', 'success')
-    router.push('/auth/login')
+    const result = await auth.register(email.value, password.value)
+    if (result?.needsConfirmation) {
+      toast.push('Check your email for a verification code (also check spam).', 'info')
+      router.push({ path: '/auth/confirm', query: { email: email.value } })
+    } else {
+      toast.push('Account created. Please sign in.', 'success')
+      router.push('/auth/login')
+    }
   } catch (e) {
-    toast.push((e as Error).message || 'Sign up failed', 'error')
+    const code = (e as { code?: string })?.code
+    if (code === 'UsernameExistsException') {
+      toast.push(signUpErrorMessage(e), 'error')
+      router.push({ path: '/auth/confirm', query: { email: email.value } })
+      return
+    }
+    toast.push(signUpErrorMessage(e), 'error')
   }
 }
 </script>
@@ -30,7 +53,12 @@ async function submit() {
         <input v-model="password" type="password" required minlength="8" class="input-field" placeholder="Password (min 8 chars)" />
         <button type="submit" class="btn-primary w-full" :disabled="auth.loading">Sign up</button>
       </form>
-      <p class="mt-4 text-center text-sm"><router-link to="/auth/login" class="text-accent">Back to sign in</router-link></p>
+      <p class="mt-4 text-center text-sm">
+        Already have an account?
+        <router-link to="/auth/login" class="text-accent hover:underline">Sign in</router-link>
+        ·
+        <router-link to="/auth/forgot" class="text-accent hover:underline">Forgot password</router-link>
+      </p>
     </div>
   </div>
 </template>

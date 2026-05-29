@@ -13,6 +13,26 @@ if [[ ! -f "${PARAMS_FILE}" ]]; then
   exit 1
 fi
 
+echo "==> Checking AWS credentials"
+CALLER="$(aws sts get-caller-identity --query Arn --output text 2>&1)" || {
+  echo "ERROR: AWS CLI not configured. Run: aws configure"
+  exit 1
+}
+echo "    Caller: ${CALLER}"
+
+if ! aws cloudformation describe-stacks --stack-name "${STACK_NAME}" --region "${REGION}" >/dev/null 2>&1; then
+  CF_ERR="$(aws cloudformation describe-stacks --stack-name "${STACK_NAME}" --region "${REGION}" 2>&1 || true)"
+  if echo "${CF_ERR}" | grep -q AccessDenied; then
+    echo ""
+    echo "ERROR: This IAM user cannot call CloudFormation."
+    echo "       Attach deploy policy from infra/IAM-DEPLOY.md (user temp only has S3 today)."
+    echo ""
+    exit 1
+  fi
+  # Stack may not exist yet on first deploy — that is OK
+  echo "    CloudFormation access OK (stack may not exist yet)"
+fi
+
 APP_NAME="$(python3 -c "import json; print([p['ParameterValue'] for p in json.load(open('${PARAMS_FILE}')) if p['ParameterKey']=='AppName'][0])")"
 ENV_NAME="$(python3 -c "import json; print([p['ParameterValue'] for p in json.load(open('${PARAMS_FILE}')) if p['ParameterKey']=='Environment'][0])")"
 ARTIFACT_BUCKET="${APP_NAME}-${ENV_NAME}-deploy-${ACCOUNT_ID}"

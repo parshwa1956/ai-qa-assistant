@@ -17,10 +17,39 @@ export function getCurrentUser(): CognitoUser | null {
   return pool.getCurrentUser()
 }
 
-export function signUp(email: string, password: string): Promise<void> {
+export type SignUpResult = {
+  needsConfirmation: boolean
+  userSub?: string
+}
+
+export function signUp(email: string, password: string): Promise<SignUpResult> {
   return new Promise((resolve, reject) => {
     const attrs = [new CognitoUserAttribute({ Name: 'email', Value: email })]
-    pool.signUp(email, password, attrs, [], (err) => {
+    pool.signUp(email, password, attrs, [], (err, result) => {
+      if (err) reject(err)
+      else
+        resolve({
+          needsConfirmation: !result?.userConfirmed,
+          userSub: result?.userSub,
+        })
+    })
+  })
+}
+
+export function confirmSignUp(email: string, code: string): Promise<void> {
+  const user = new CognitoUser({ Username: email, Pool: pool })
+  return new Promise((resolve, reject) => {
+    user.confirmRegistration(code.trim(), true, (err) => {
+      if (err) reject(err)
+      else resolve()
+    })
+  })
+}
+
+export function resendConfirmationCode(email: string): Promise<void> {
+  const user = new CognitoUser({ Username: email, Pool: pool })
+  return new Promise((resolve, reject) => {
+    user.resendConfirmationCode((err) => {
       if (err) reject(err)
       else resolve()
     })
@@ -54,9 +83,10 @@ export function forgotPassword(email: string): Promise<void> {
 }
 
 export function confirmPassword(email: string, code: string, newPassword: string): Promise<void> {
-  const user = new CognitoUser({ Username: email, Pool: pool })
+  const user = new CognitoUser({ Username: email.trim(), Pool: pool })
+  const verificationCode = code.trim()
   return new Promise((resolve, reject) => {
-    user.confirmPassword(code, newPassword, {
+    user.confirmPassword(verificationCode, newPassword, {
       onSuccess: () => resolve(),
       onFailure: (err) => reject(err),
     })

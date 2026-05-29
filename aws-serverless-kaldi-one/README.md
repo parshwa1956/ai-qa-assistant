@@ -19,7 +19,7 @@ See [architecture.md](./architecture.md) and [docs migration notes](#migration-f
 
 ## Prerequisites
 
-- AWS CLI v2 configured with deploy permissions
+- AWS CLI v2 configured with **deploy permissions** (not S3-only). See [infra/IAM-DEPLOY.md](./infra/IAM-DEPLOY.md) if you get `cloudformation:DescribeStacks` AccessDenied.
 - Node.js 20+ and npm
 - Python 3.12+
 - ACM certificate in **us-east-1** for your CloudFront domain
@@ -126,6 +126,24 @@ curl -s -X POST "$API/history" \
 # Dashboard stats
 curl -s "$API/dashboard" -H "Authorization: Bearer $TOKEN"
 ```
+
+## Cognito: no confirmation email / cannot sign in
+
+Sign-up uses Cognito **email verification**. Default Cognito mail often lands in **spam** or is delayed; the app previously had no “enter code” screen.
+
+**Fix your account now (fastest):**
+
+1. AWS Console → **Cognito** → your user pool → **Users**
+2. Open `chokshi.kushal@gmail.com` (or your email)
+3. **Actions** → **Confirm user account**
+4. Sign in again at `/auth/login`
+
+**In the app (after frontend redeploy):**
+
+- `/auth/confirm` — enter verification code or **Resend code**
+- Sign-in redirects here if status is `UserNotConfirmedException`
+
+**Reliable email in production:** configure **Amazon SES** on the user pool (verified domain `kaldiglobal.com`, move Cognito off `COGNITO_DEFAULT` sending).
 
 ## Destroy
 
