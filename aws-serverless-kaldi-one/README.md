@@ -61,6 +61,15 @@ cp infra/parameters.example.json infra/parameters.json
 | `PriceClass` | CloudFront price class |
 | `LogRetentionDays` | CloudWatch retention |
 
+## Screen capture (Workspace)
+
+**Capture screen** uses your browser’s built-in screen sharing (same approach as Google Meet or Zoom):
+
+- You choose what to share: a **browser tab**, an **application window**, or your **entire screen** (Windows & macOS).
+- **Kaldi One cannot capture anything without your permission** — the browser always shows a system dialog first.
+- No desktop recorder app is installed; capture runs in Chrome, Edge, Firefox, or Safari over HTTPS.
+- Best for QA **Bug Reports** with screenshot vision analysis.
+
 ## Local development
 
 ### Backend tests

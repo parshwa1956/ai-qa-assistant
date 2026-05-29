@@ -21,8 +21,9 @@ export const TIPS_BY_ROUTE: Record<string, ContextualTip> = {
       '1. Select a project in the header (required before Generate).',
       '2. Pick a workspace tab: QA, BA, Dev, or Flow to Requirement.',
       '3. Choose an AI tool card, then enter title and context.',
-      '4. Attach screenshots or documents for richer results.',
-      '5. Review output, then Save, Export, or Create Jira issue.',
+      '4. Use Capture screen to pick a browser tab, app window, or full display (macOS/Windows).',
+      '5. Attach files or screenshots for richer AI results (especially Bug Reports).',
+      '6. Review output, then Save, Export, or Create Jira issue.',
     ],
   },
   '/app/history': {
