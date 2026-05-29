@@ -25,7 +25,7 @@ onMounted(async () => {
 
     <div v-if="loading" class="grid gap-4 md:grid-cols-3"><LoadingSkeleton v-for="n in 3" :key="n" :lines="2" /></div>
     <div v-else-if="stats" class="space-y-8">
-      <div class="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+      <div class="grid gap-4 sm:grid-cols-2 lg:grid-cols-4" data-guide="dashboard-stats">
         <StatCard label="Projects" :value="stats.totalProjects" icon="📁" />
         <StatCard label="Test Cases" :value="stats.totalTestCases" icon="✅" />
         <StatCard label="Bug Reports" :value="stats.totalBugReports" icon="🐛" />

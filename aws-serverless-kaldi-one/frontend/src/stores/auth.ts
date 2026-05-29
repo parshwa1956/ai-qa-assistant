@@ -44,6 +44,8 @@ export const useAuthStore = defineStore('auth', () => {
     email.value = data.email
     useProjectStore().setProjects(data.projects as import('@/types').Project[])
     bootstrapped.value = true
+    const { useGuideStore } = await import('./guide')
+    setTimeout(() => useGuideStore().maybeAutoStartTour(), 800)
   }
 
   async function restoreSession() {

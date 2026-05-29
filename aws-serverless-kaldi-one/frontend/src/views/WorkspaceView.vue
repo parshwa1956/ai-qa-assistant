@@ -97,7 +97,7 @@ async function createJira() {
     <template #title>Workspace</template>
     <template #subtitle>Choose a workspace and AI tool</template>
 
-    <div class="mb-6 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+    <div class="mb-6 grid gap-3 sm:grid-cols-2 lg:grid-cols-4" data-guide="workspace-nav">
       <WorkspaceCard
         v-for="(ws, id) in WORKSPACES"
         :key="id"

@@ -28,23 +28,28 @@ async function submit() {
 </script>
 
 <template>
-  <div class="flex min-h-screen items-center justify-center bg-gradient-to-br from-blue-50/50 to-white px-4 dark:from-surface-dark dark:to-slate-900">
+  <div class="ios-app-shell flex min-h-screen items-center justify-center px-4">
     <div class="absolute right-4 top-4"><ThemeToggle /></div>
-    <div class="glass-card w-full max-w-md p-8 page-enter">
-      <h1 class="text-2xl font-bold">Sign in</h1>
-      <p class="mt-1 text-sm text-muted-light dark:text-muted-dark">Welcome back to Kaldi One</p>
-      <form class="mt-6 space-y-4" @submit.prevent="submit">
-        <input v-model="email" type="email" required class="input-field" placeholder="Email" />
-        <input v-model="password" type="password" required class="input-field" placeholder="Password" />
+    <div class="guide-sheet w-full max-w-md page-enter">
+      <div class="mb-6 flex items-center gap-3">
+        <div class="flex h-12 w-12 items-center justify-center rounded-[14px] bg-gradient-to-br from-accent to-indigo-500 text-xl font-bold text-white">K</div>
+        <div>
+          <h1 class="text-2xl font-bold tracking-tight">Sign in</h1>
+          <p class="text-sm text-muted-light dark:text-muted-dark">Welcome back to Kaldi One</p>
+        </div>
+      </div>
+      <form class="space-y-4" @submit.prevent="submit">
+        <input v-model="email" type="email" required class="input-field" placeholder="Email" autocomplete="email" />
+        <input v-model="password" type="password" required class="input-field" placeholder="Password" autocomplete="current-password" />
         <button type="submit" class="btn-primary w-full" :disabled="auth.loading">{{ auth.loading ? 'Signing in…' : 'Sign in' }}</button>
       </form>
       <p class="mt-4 text-center text-sm">
-        <router-link to="/auth/forgot" class="text-accent hover:underline">Forgot password?</router-link>
+        <router-link to="/auth/forgot" class="font-medium text-accent hover:underline">Forgot password?</router-link>
         ·
-        <router-link to="/auth/confirm" class="text-accent hover:underline">Confirm email</router-link>
+        <router-link to="/auth/confirm" class="font-medium text-accent hover:underline">Confirm email</router-link>
       </p>
       <p class="mt-2 text-center text-sm text-muted-light dark:text-muted-dark">
-        No account? <router-link to="/auth/register" class="text-accent hover:underline">Sign up</router-link>
+        No account? <router-link to="/auth/register" class="font-medium text-accent hover:underline">Sign up</router-link>
       </p>
     </div>
   </div>
